@@ -32,6 +32,16 @@ def header_footer(canvas, doc):
 
 def markdown_to_html_tags(text: str) -> str:
     """Convert basic markdown bold, italic, and code to ReportLab supported HTML-like tags."""
+    # Clean up characters that cause boxes in standard PDF fonts
+    text = text.replace('₹', 'Rs.')
+    text = text.replace('—', '-').replace('–', '-')
+    text = text.replace('“', '"').replace('”', '"')
+    text = text.replace('‘', "'").replace('’', "'")
+    text = text.replace('…', '...')
+    
+    # Strip emojis and other unsupported characters by encoding to the PDF standard
+    text = text.encode('cp1252', errors='ignore').decode('cp1252')
+    
     # Bold
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     # Italic
