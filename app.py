@@ -5,7 +5,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import yfinance as yf
 from invest_ai.agents.graph import research_graph
-from invest_ai.utils.ticker import resolve_ticker, get_currency_symbol
+from invest_ai.utils import resolve_ticker, get_currency_symbol, generate_pdf_report
 
 # --- Page Config ---
 st.set_page_config(
@@ -197,6 +197,19 @@ else:
                 
                 st.markdown("### 📋 Final Research Report")
                 st.write_stream(stream_report(final_report))
+                
+                # PDF Download Button
+                try:
+                    pdf_bytes = generate_pdf_report(final_report)
+                    st.download_button(
+                        label="📄 Download PDF Report",
+                        data=pdf_bytes,
+                        file_name=f"{ticker.replace(', ', '_')}_Research_Report.pdf",
+                        mime="application/pdf",
+                        type="primary"
+                    )
+                except Exception as pdf_e:
+                    st.error(f"Failed to generate PDF: {pdf_e}")
                 
                 with st.expander("Raw Analyst Data"):
                     if "technical" in agents_run:
