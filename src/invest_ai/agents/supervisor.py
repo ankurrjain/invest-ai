@@ -31,8 +31,20 @@ For a full research / deep dive, include ["technical", "fundamental", "news"].""
 def supervisor_node(state: ResearchState) -> dict:
     """Route the query to the appropriate specialist agents."""
     mode = state.get("mode", "single")
-    if mode != "single":
-        return {"agents_to_call": [], "agents_called": [], "company_name": None, "current_price": None}
+    if mode not in ("single",):
+        # For compare, screener, live_intel, live_news — enrich company info and pass through
+        company_name = state.get("company_name")
+        current_price = state.get("current_price")
+        if not company_name and mode not in ("screener",):
+            try:
+                import yfinance as yf
+                ticker = state.get("ticker", "")
+                info = yf.Ticker(ticker).info
+                company_name = info.get("longName", ticker)
+                current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+            except Exception:
+                pass
+        return {"agents_to_call": [], "agents_called": [], "company_name": company_name, "current_price": current_price}
 
     llm = ChatOllama(
         model=MODEL_NAME,

@@ -11,6 +11,14 @@ from .fundamentals import (
     get_balance_sheet, get_cash_flow, get_dividends,
 )
 from .news import search_stock_news, get_market_news
+from .live_intel import (
+    get_earnings_history,
+    get_analyst_estimates,
+    get_upcoming_catalysts,
+    get_insider_activity,
+    get_institutional_changes,
+    search_company_operations,
+)
 
 ALL_TOOLS = [
     get_stock_price, get_company_info, get_analyst_recommendations,
@@ -36,6 +44,16 @@ FUNDAMENTAL_TOOLS = [
 
 NEWS_TOOLS = [search_stock_news, get_market_news]
 
+LIVE_INTEL_TOOLS = [
+    get_earnings_history,
+    get_analyst_estimates,
+    get_upcoming_catalysts,
+    get_insider_activity,
+    get_institutional_changes,
+    search_company_operations,
+]
+
 __all__ = [
     "ALL_TOOLS", "TECHNICAL_TOOLS", "FUNDAMENTAL_TOOLS", "NEWS_TOOLS",
+    "LIVE_INTEL_TOOLS",
 ]

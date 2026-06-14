@@ -5,8 +5,10 @@ import streamlit as st
 import plotly.graph_objects as go
 import yfinance as yf
 import pandas as pd
+from datetime import datetime
 from invest_ai.agents.graph import research_graph
 from invest_ai.utils.ticker import resolve_ticker, get_currency_symbol
+from invest_ai.utils.pdf import generate_pdf_report
 from invest_ai.utils.dashboards import (
     get_us_etf_holdings,
     get_nifty_50_constituents,
@@ -90,7 +92,7 @@ def stream_report(text):
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     
-    app_mode = st.radio("Mode", ["Single Stock Research", "Compare Stocks", "Thematic Screener", "Dashboards"])
+    app_mode = st.radio("Mode", ["Single Stock Research", "Compare Stocks", "Thematic Screener", "Dashboards", "Live Intelligence Report", "Live News Report"])
     
     market = st.radio("Target Market", ["India (NSE/BSE)", "US (NYSE/NASDAQ)"])
     market_val = "india" if "India" in market else "us"
@@ -103,7 +105,6 @@ with st.sidebar:
             "Full Deep Dive (Tech, Fund, News)",
             "Technical Analysis Only",
             "Fundamental Analysis Only",
-            "News & Sentiment Only",
             "Dividend Yield Report",
             "Economic Moat Report"
         ])
@@ -114,6 +115,24 @@ with st.sidebar:
         st.markdown("Explore comprehensive dashboards for ETFs and stock trends.")
         raw_ticker = "Dashboards"  # Dummy value to pass the 'if not raw_ticker' check
         depth = "N/A"
+    elif app_mode == "Live Intelligence Report":
+        raw_ticker = st.text_input("Enter Ticker Symbol", placeholder="e.g. AAPL or RELIANCE").upper()
+        depth = "Live Intelligence Report"
+        st.markdown("""<div style='background: linear-gradient(135deg, #1a1a2e, #16213e);
+            border: 1px solid #e94560; border-radius: 8px; padding: 10px; margin-top: 8px;'>
+            <span style='color:#e94560; font-weight:700;'>🔴 LIVE</span>
+            <span style='color:#a0aec0; font-size:0.85rem;'> Fetches real-time earnings, analyst estimates,
+            insider activity, catalysts & company intelligence from the internet.</span>
+            </div>""", unsafe_allow_html=True)
+    elif app_mode == "Live News Report":
+        raw_ticker = st.text_input("Enter Ticker Symbol", placeholder="e.g. AAPL or RELIANCE").upper()
+        depth = "Live News Report"
+        st.markdown("""<div style='background: linear-gradient(135deg, #1a1a2e, #16213e);
+            border: 1px solid #ff6b35; border-radius: 8px; padding: 10px; margin-top: 8px;'>
+            <span style='color:#ff6b35; font-weight:700;'>📰 LIVE</span>
+            <span style='color:#a0aec0; font-size:0.85rem;'> Fetches real-time news, sentiment, breaking developments,
+            and live event intelligence from news sources.</span>
+            </div>""", unsafe_allow_html=True)
     else:
         raw_ticker = st.text_input("Enter Investment Theme", placeholder="e.g. AI Semiconductors or Renewable Energy")
         depth = "Thematic Screener Report"
@@ -274,6 +293,265 @@ else:
                 else:
                     st.warning("Could not fetch trending data.")
 
+    elif app_mode == "Live Intelligence Report":
+        ticker = resolve_ticker(raw_ticker, market_val)
+        st.subheader(f"🔴 Live Intelligence: `{ticker}`")
+
+        # Quick snapshot metrics
+        try:
+            snap = yf.Ticker(ticker).info
+            cur = get_currency_symbol(ticker)
+            col1, col2, col3, col4 = st.columns(4)
+            price = snap.get('currentPrice') or snap.get('regularMarketPrice')
+            prev_close = snap.get('previousClose')
+            change_pct = ((price - prev_close) / prev_close * 100) if price and prev_close else None
+            mktcap = snap.get('marketCap')
+            mktcap_str = f"{cur}{mktcap/1e9:.1f}B" if mktcap else "N/A"
+            rec = snap.get('recommendationKey', '').replace('_', ' ').title() or 'N/A'
+            col1.metric("Price", f"{cur}{price:.2f}" if price else "N/A",
+                        f"{change_pct:+.2f}%" if change_pct else None)
+            col2.metric("Market Cap", mktcap_str)
+            col3.metric("Analyst Consensus", rec)
+            col4.metric("Sector", snap.get('sector', 'N/A'))
+        except Exception:
+            pass
+
+        # Chart
+        chart_fig = plot_candlestick(ticker, period="3mo")
+        if chart_fig:
+            st.plotly_chart(chart_fig, use_container_width=True)
+
+        with st.form(key="live_intel_form"):
+            user_query = st.text_area(
+                "Focus Area (Optional)",
+                value=f"Run a full live intelligence analysis for {ticker}. Assess whether the upcoming results are likely to beat or miss expectations.",
+                height=80
+            )
+            run_live = st.form_submit_button(label="🔴 Run Live Intelligence Analysis", type="primary")
+
+        if run_live:
+            with st.status("🔴 Live Intelligence Agents at work...", expanded=True) as status:
+                st.write("📡 Fetching earnings history & beat/miss record...")
+                st.write("📊 Pulling analyst estimates & price targets...")
+                st.write("📅 Scanning for upcoming catalysts & events...")
+                st.write("🏦 Checking insider & institutional activity...")
+                st.write("🏢 Gathering company operations intelligence...")
+                st.write("🌐 Searching live web for strategic moves...")
+
+                initial_state = {
+                    "messages": [],
+                    "mode": "live_intel",
+                    "ticker": ticker,
+                    "market": market_val,
+                    "query": user_query,
+                    "agents_to_call": [],
+                    "agents_called": [],
+                    "technical_analysis": None,
+                    "fundamental_analysis": None,
+                    "news_analysis": None,
+                    "dividend_analysis": None,
+                    "moat_analysis": None,
+                    "comparison_analysis": None,
+                    "screener_analysis": None,
+                    "live_intel_analysis": None,
+                    "final_report": None,
+                    "company_name": None,
+                    "current_price": None,
+                    "error": None,
+                }
+
+                try:
+                    result = research_graph.invoke(initial_state)
+                    final_report = result.get("final_report", "")
+                    live_intel_raw = result.get("live_intel_analysis", "")
+                    company_name = result.get("company_name", ticker)
+                    status.update(label="✅ Live Intelligence Complete!", state="complete", expanded=False)
+
+                    # ── Verdict Banner ──────────────────────────────────────
+                    verdict_color = "#22c55e"
+                    verdict_icon = "✅"
+                    verdict_text = "LIKELY TO BEAT"
+                    report_lower = final_report.lower() if final_report else ""
+                    if "likely to miss" in report_lower or "miss" in report_lower[:300]:
+                        verdict_color = "#ef4444"
+                        verdict_icon = "❌"
+                        verdict_text = "LIKELY TO MISS"
+                    elif "in-line" in report_lower or "in line" in report_lower:
+                        verdict_color = "#f59e0b"
+                        verdict_icon = "➖"
+                        verdict_text = "LIKELY IN-LINE"
+
+                    st.markdown(f"""
+                    <div style='background: linear-gradient(135deg, #0f172a, #1e293b);
+                        border-left: 5px solid {verdict_color};
+                        border-radius: 10px; padding: 20px; margin: 16px 0;'>
+                        <div style='font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px;'>LIVE EARNINGS VERDICT</div>
+                        <div style='font-size: 2rem; font-weight: 800; color: {verdict_color};'>{verdict_icon} {verdict_text}</div>
+                        <div style='font-size: 0.9rem; color: #cbd5e1; margin-top: 6px;'>{company_name} ({ticker}) · {datetime.now().strftime("%b %d, %Y %H:%M")}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # ── Final Report ────────────────────────────────────────
+                    st.markdown("### 📋 Live Intelligence Report")
+                    st.write_stream(stream_report(final_report))
+
+                    # ── Raw Intel Data ──────────────────────────────────────
+                    with st.expander("🔬 Raw Live Intelligence Data (from agent tools)"):
+                        if live_intel_raw:
+                            st.markdown(live_intel_raw)
+                        else:
+                            st.info("No raw data available.")
+
+                    # ── PDF Download ────────────────────────────────────────
+                    st.markdown("---")
+                    st.markdown("### 📥 Download Report")
+                    try:
+                        pdf_bytes = generate_pdf_report(final_report)
+                        safe_ticker = ticker.replace('.', '_')
+                        filename = f"live_intel_{safe_ticker}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                        st.download_button(
+                            label="📄 Download Live Intelligence PDF",
+                            data=pdf_bytes,
+                            file_name=filename,
+                            mime="application/pdf",
+                            type="primary"
+                        )
+                    except Exception as pdf_err:
+                        st.warning(f"PDF generation failed: {pdf_err}")
+
+                except Exception as e:
+                    status.update(label="❌ Live Intelligence Failed", state="error", expanded=True)
+                    st.error(f"Pipeline failed: {e}")
+    elif app_mode == "Live News Report":
+        ticker = resolve_ticker(raw_ticker, market_val)
+        st.subheader(f"📰 Live News Report: `{ticker}`")
+
+        # Quick snapshot metrics
+        try:
+            snap = yf.Ticker(ticker).info
+            cur = get_currency_symbol(ticker)
+            col1, col2, col3, col4 = st.columns(4)
+            price = snap.get('currentPrice') or snap.get('regularMarketPrice')
+            prev_close = snap.get('previousClose')
+            change_pct = ((price - prev_close) / prev_close * 100) if price and prev_close else None
+            mktcap = snap.get('marketCap')
+            mktcap_str = f"{cur}{mktcap/1e9:.1f}B" if mktcap else "N/A"
+            rec = snap.get('recommendationKey', '').replace('_', ' ').title() or 'N/A'
+            col1.metric("Price", f"{cur}{price:.2f}" if price else "N/A",
+                        f"{change_pct:+.2f}%" if change_pct else None)
+            col2.metric("Market Cap", mktcap_str)
+            col3.metric("Analyst Consensus", rec)
+            col4.metric("Sector", snap.get('sector', 'N/A'))
+        except Exception:
+            pass
+
+        # Chart
+        chart_fig = plot_candlestick(ticker, period="3mo")
+        if chart_fig:
+            st.plotly_chart(chart_fig, use_container_width=True)
+
+        with st.form(key="live_news_report_form"):
+            user_query = st.text_area(
+                "Focus Area (Optional)",
+                value=f"Run a live news analysis for {ticker}. Assess what breaking news or sentiment shifts are likely to impact the stock in the next 1-3 days.",
+                height=80
+            )
+            run_live_news = st.form_submit_button(label="📰 Run Live News Report Analysis", type="primary")
+
+        if run_live_news:
+            with st.status("📰 Live News Report Agents at work...", expanded=True) as status:
+                st.write("📰 Fetching breaking news & real-time sentiment...")
+                st.write("📈 Analyzing news-driven catalysts & events...")
+                st.write("🔍 Scanning trending topics & social signals...")
+                st.write("⚡ Assessing live event impact on price action...")
+                st.write("🌐 Searching live web for news verification...")
+
+                initial_state = {
+                    "messages": [],
+                    "mode": "live_news",
+                    "ticker": ticker,
+                    "market": market_val,
+                    "query": user_query,
+                    "agents_to_call": [],
+                    "agents_called": [],
+                    "technical_analysis": None,
+                    "fundamental_analysis": None,
+                    "news_analysis": None,
+                    "dividend_analysis": None,
+                    "moat_analysis": None,
+                    "comparison_analysis": None,
+                    "screener_analysis": None,
+                    "live_intel_analysis": None,
+                    "live_news_analysis": None,
+                    "final_report": None,
+                    "company_name": None,
+                    "current_price": None,
+                    "error": None,
+                }
+
+                try:
+                    result = research_graph.invoke(initial_state)
+                    final_report = result.get("final_report", "")
+                    live_news_raw = result.get("live_news_analysis", "")
+                    company_name = result.get("company_name", ticker)
+                    status.update(label="✅ Live News Report Complete!", state="complete", expanded=False)
+
+                    # ── Verdict Banner ──────────────────────────────────────
+                    verdict_color = "#10b981"
+                    verdict_icon = "📈"
+                    verdict_text = "LIKELY TO OUTPERFORM"
+                    report_lower = final_report.lower() if final_report else ""
+                    if "likely to underperform" in report_lower or "underperform" in report_lower[:300]:
+                        verdict_color = "#ef4444"
+                        verdict_icon = "📉"
+                        verdict_text = "LIKELY TO UNDERPERFORM"
+                    elif "trade in-line" in report_lower or "in-line" in report_lower or "trade in line" in report_lower:
+                        verdict_color = "#f59e0b"
+                        verdict_icon = "➡️"
+                        verdict_text = "LIKELY TO TRADE IN-LINE"
+
+                    st.markdown(f"""
+                    <div style='background: linear-gradient(135deg, #0f172a, #1e293b);
+                        border-left: 5px solid {verdict_color};
+                        border-radius: 10px; padding: 20px; margin: 16px 0;'>
+                        <div style='font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px;'>LIVE NEWS VERDICT</div>
+                        <div style='font-size: 2rem; font-weight: 800; color: {verdict_color};'>{verdict_icon} {verdict_text}</div>
+                        <div style='font-size: 0.9rem; color: #cbd5e1; margin-top: 6px;'>{company_name} ({ticker}) · {datetime.now().strftime("%b %d, %Y %H:%M")}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # ── Final Report ────────────────────────────────────────
+                    st.markdown("### 📋 Live News Report")
+                    st.write_stream(stream_report(final_report))
+
+                    # ── Raw News Data ───────────────────────────────────────
+                    with st.expander("📰 Raw Live News Report Data (from agent tools)"):
+                        if live_news_raw:
+                            st.markdown(live_news_raw)
+                        else:
+                            st.info("No raw data available.")
+
+                    # ── PDF Download ────────────────────────────────────────
+                    st.markdown("---")
+                    st.markdown("### 📥 Download Report")
+                    try:
+                        pdf_bytes = generate_pdf_report(final_report)
+                        safe_ticker = ticker.replace('.', '_')
+                        filename = f"live_news_report_{safe_ticker}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                        st.download_button(
+                            label="📄 Download Live News Report PDF",
+                            data=pdf_bytes,
+                            file_name=filename,
+                            mime="application/pdf",
+                            type="primary"
+                        )
+                    except Exception as pdf_err:
+                        st.warning(f"PDF generation failed: {pdf_err}")
+
+                except Exception as e:
+                    status.update(label="❌ Live News Intelligence Failed", state="error", expanded=True)
+                    st.error(f"Pipeline failed: {e}")
+
     else:
         # Existing logic for agents
         # Chat / Query input
@@ -281,7 +559,6 @@ else:
             "Full Deep Dive (Tech, Fund, News)": f"Provide a comprehensive investment research report for {ticker} including technicals, fundamentals, and recent news.",
             "Technical Analysis Only": f"Focus only on technical analysis and price action for {ticker}.",
             "Fundamental Analysis Only": f"Focus only on fundamental analysis, valuation, and financials for {ticker}.",
-            "News & Sentiment Only": f"Focus only on recent news and market sentiment for {ticker}.",
             "Dividend Yield Report": f"Provide a detailed dividend yield and safety report for {ticker}.",
             "Economic Moat Report": f"Analyze the economic moat and competitive advantages of {ticker}.",
             "Comparison Report": f"Compare these stocks side-by-side: {ticker}.",

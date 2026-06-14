@@ -7,7 +7,7 @@ from langchain_core.messages import BaseMessage
 class ResearchState(TypedDict):
     """Shared state passed between all agents in the research graph."""
     messages: Annotated[List[BaseMessage], add_messages]
-    mode: str                         # "single", "compare", "screener"
+    mode: str                         # "single", "compare", "screener", "live_intel"
     ticker: str                       # comma-separated for comparison, theme string for screener
     market: str                       # "india" or "us"
     query: str
@@ -22,6 +22,8 @@ class ResearchState(TypedDict):
     moat_analysis: Optional[str]
     comparison_analysis: Optional[str]
     screener_analysis: Optional[str]
+    live_intel_analysis: Optional[str]
+    live_news_analysis: Optional[str]
     
     final_report: Optional[str]
     company_name: Optional[str]

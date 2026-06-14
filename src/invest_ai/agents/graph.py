@@ -12,17 +12,23 @@ from .comparison import comparison_node
 from .dividend import dividend_node
 from .moat import moat_node
 from .screener import screener_node
+from .live_intel import live_intel_node
+from .live_news import live_news_node
 
 
 def _route_after_supervisor(state: ResearchState) -> list[str]:
     """Fan out to all requested specialist agents in parallel."""
     mode = state.get("mode", "single")
-    
+
     if mode == "compare":
         return ["comparison_agent"]
     elif mode == "screener":
         return ["screener_agent"]
-        
+    elif mode == "live_intel":
+        return ["live_intel_agent"]
+    elif mode == "live_news":
+        return ["live_news_agent"]
+
     agents = state.get("agents_to_call", ["technical", "fundamental", "news"])
     mapping = {
         "technical": "technical_agent",
@@ -50,6 +56,8 @@ def build_graph() -> StateGraph:
     graph.add_node("dividend_agent", dividend_node)
     graph.add_node("moat_agent", moat_node)
     graph.add_node("screener_agent", screener_node)
+    graph.add_node("live_intel_agent", live_intel_node)
+    graph.add_node("live_news_agent", live_news_node)
     graph.add_node("synthesizer", synthesizer_node)
 
     # Entry
@@ -67,6 +75,8 @@ def build_graph() -> StateGraph:
             "dividend_agent": "dividend_agent",
             "moat_agent": "moat_agent",
             "screener_agent": "screener_agent",
+            "live_intel_agent": "live_intel_agent",
+            "live_news_agent": "live_news_agent",
         },
     )
 
@@ -78,6 +88,8 @@ def build_graph() -> StateGraph:
     graph.add_edge("dividend_agent", "synthesizer")
     graph.add_edge("moat_agent", "synthesizer")
     graph.add_edge("screener_agent", "synthesizer")
+    graph.add_edge("live_intel_agent", "synthesizer")
+    graph.add_edge("live_news_agent", "synthesizer")
 
     # End
     graph.add_edge("synthesizer", END)
