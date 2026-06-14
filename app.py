@@ -4,8 +4,17 @@ Streamlit UI for InvestAI.
 import streamlit as st
 import plotly.graph_objects as go
 import yfinance as yf
+import pandas as pd
 from invest_ai.agents.graph import research_graph
-from invest_ai.utils import resolve_ticker, get_currency_symbol, generate_pdf_report
+from invest_ai.utils.ticker import resolve_ticker, get_currency_symbol
+from invest_ai.utils.dashboards import (
+    get_us_etf_holdings,
+    get_nifty_50_constituents,
+    get_nifty_next_50_constituents,
+    get_bank_nifty_constituents,
+    get_fii_dii_holdings,
+    get_trending_stocks
+)
 
 # --- Page Config ---
 st.set_page_config(
@@ -81,7 +90,7 @@ def stream_report(text):
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     
-    app_mode = st.radio("Mode", ["Single Stock Research", "Compare Stocks", "Thematic Screener"])
+    app_mode = st.radio("Mode", ["Single Stock Research", "Compare Stocks", "Thematic Screener", "Dashboards"])
     
     market = st.radio("Target Market", ["India (NSE/BSE)", "US (NYSE/NASDAQ)"])
     market_val = "india" if "India" in market else "us"
@@ -101,6 +110,10 @@ with st.sidebar:
     elif app_mode == "Compare Stocks":
         raw_ticker = st.text_input("Enter Tickers (comma-separated)", placeholder="e.g. AAPL, MSFT, GOOGL").upper()
         depth = "Comparison Report"
+    elif app_mode == "Dashboards":
+        st.markdown("Explore comprehensive dashboards for ETFs and stock trends.")
+        raw_ticker = "Dashboards"  # Dummy value to pass the 'if not raw_ticker' check
+        depth = "N/A"
     else:
         raw_ticker = st.text_input("Enter Investment Theme", placeholder="e.g. AI Semiconductors or Renewable Energy")
         depth = "Thematic Screener Report"
@@ -127,106 +140,225 @@ else:
         tickers = [resolve_ticker(t.strip(), market_val) for t in raw_ticker.split(",") if t.strip()]
         ticker = ", ".join(tickers)
         st.subheader(f"Comparing: `{ticker}`")
-    else:
+    elif app_mode == "Thematic Screener":
         ticker = raw_ticker
         st.subheader(f"Screening Theme: `{ticker}`")
-    
-    # Chat / Query input
-    query_map = {
-        "Full Deep Dive (Tech, Fund, News)": f"Provide a comprehensive investment research report for {ticker} including technicals, fundamentals, and recent news.",
-        "Technical Analysis Only": f"Focus only on technical analysis and price action for {ticker}.",
-        "Fundamental Analysis Only": f"Focus only on fundamental analysis, valuation, and financials for {ticker}.",
-        "News & Sentiment Only": f"Focus only on recent news and market sentiment for {ticker}.",
-        "Dividend Yield Report": f"Provide a detailed dividend yield and safety report for {ticker}.",
-        "Economic Moat Report": f"Analyze the economic moat and competitive advantages of {ticker}.",
-        "Comparison Report": f"Compare these stocks side-by-side: {ticker}.",
-        "Thematic Screener Report": f"Find stocks matching this theme: '{ticker}' and evaluate their moat and technicals."
-    }
-    
-    default_query = query_map.get(depth, f"Analyze {ticker}")
-    
-    with st.form(key="research_form"):
-        user_query = st.text_area("Custom Query (Optional)", value=default_query, height=100)
-        submit_button = st.form_submit_button(label="🚀 Run Agentic Research")
-
-    if submit_button:
-        with st.status("🧠 Agents at work...", expanded=True) as status:
-            
-            # Map UI mode to internal state mode
-            mode_map = {
-                "Single Stock Research": "single",
-                "Compare Stocks": "compare",
-                "Thematic Screener": "screener"
+    elif app_mode == "Dashboards":
+        st.subheader("Market Dashboards")
+        ticker = "Dashboards"
+        
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "🇮🇳 Indian ETFs", 
+            "🇮🇳 Indian Mutual Funds",
+            "🌎 US / Global ETFs", 
+            "🏦 FII / DII Holdings (India)", 
+            "📈 Trending Stocks"
+        ])
+        
+        with tab1:
+            st.markdown("### Indian Index ETFs & Mutual Funds")
+            st.write("View the underlying constituents of popular Indian index ETFs.")
+            ind_etf = st.selectbox("Select Indian ETF", ["NIFTYBEES.NS (Nifty 50)", "JUNIORBEES.NS (Nifty Next 50)", "BANKBEES.NS (Bank Nifty)"])
+            with st.spinner("Fetching data..."):
+                if "NIFTYBEES" in ind_etf:
+                    df_ind = get_nifty_50_constituents()
+                elif "JUNIORBEES" in ind_etf:
+                    df_ind = get_nifty_next_50_constituents()
+                else:
+                    df_ind = get_bank_nifty_constituents()
+                
+                if not df_ind.empty:
+                    st.dataframe(df_ind, use_container_width=True)
+                else:
+                    st.warning("Could not fetch index constituents at this time.")
+                    
+        with tab2:
+            st.markdown("### Indian Mutual Funds")
+            st.write("View the underlying top holdings of major Indian Mutual Funds with live market data.")
+            indian_mfs = {
+                "Parag Parikh Flexi Cap Fund": "0P0000XW8F.BO",
+                "SBI Small Cap Fund": "0P0000XVUR.BO",
+                "Mirae Asset Large Cap Fund": "0P0000XVAA.BO",
+                "Nippon India Small Cap Fund": "0P0000XWA1.BO",
+                "Axis Bluechip Fund": "0P00005WLZ.BO"
             }
-            internal_mode = mode_map.get(app_mode, "single")
-
-            initial_state = {
-                "messages": [],
-                "mode": internal_mode,
-                "ticker": ticker,
-                "market": market_val,
-                "query": user_query,
-                "agents_to_call": [],
-                "agents_called": [],
-                "technical_analysis": None,
-                "fundamental_analysis": None,
-                "news_analysis": None,
-                "dividend_analysis": None,
-                "moat_analysis": None,
-                "comparison_analysis": None,
-                "screener_analysis": None,
-                "final_report": None,
-                "company_name": None,
-                "current_price": None,
-                "error": None,
+            selected_mf = st.selectbox("Select Indian Mutual Fund", list(indian_mfs.keys()))
+            with st.spinner("Fetching live top holdings and market data..."):
+                df_mf = get_us_etf_holdings(indian_mfs[selected_mf])
+                if not df_mf.empty:
+                    # Format Holding Percent
+                    if 'Holding Percent' in df_mf.columns:
+                        df_mf['Holding Percent'] = df_mf['Holding Percent'].apply(lambda x: f"{x*100:.2f}%" if pd.notnull(x) else "N/A")
+                    st.dataframe(df_mf, use_container_width=True)
+                else:
+                    st.warning("No holdings data available for this mutual fund.")
+                    
+        with tab3:
+            st.markdown("### US & Global ETFs")
+            us_etfs = {
+                "SPY (S&P 500)": "SPY",
+                "QQQ (Nasdaq 100)": "QQQ",
+                "VTI (Total Market)": "VTI",
+                "IWM (Russell 2000)": "IWM",
+                "SCHD (Dividend Equity)": "SCHD",
+                "BOTZ (Robotics & AI)": "BOTZ",
+                "AIQ (AI & Tech)": "AIQ",
+                "SMH (Semiconductors)": "SMH",
+                "SOXX (Semiconductors)": "SOXX",
+                "QTUM (Quantum Computing)": "QTUM",
+                "ARKK (Innovation)": "ARKK",
+                "ARKG (Genomics)": "ARKG",
+                "URTH (MSCI World)": "URTH",
+                "GLD (Gold)": "GLD",
+                "JEPI (JPMorgan Equity Premium)": "JEPI",
+                "XLF (Financials)": "XLF",
+                "XLV (Health Care)": "XLV",
+                "XLE (Energy)": "XLE",
+                "VNQ (Real Estate)": "VNQ",
+                "XLU (Utilities)": "XLU"
             }
+            selected_us_etf = st.selectbox("Select US/Global ETF", list(us_etfs.keys()))
+            with st.spinner("Fetching live top holdings and market data..."):
+                df_us = get_us_etf_holdings(us_etfs[selected_us_etf])
+                if not df_us.empty:
+                    if 'Holding Percent' in df_us.columns:
+                        df_us['Holding Percent'] = df_us['Holding Percent'].apply(lambda x: f"{x*100:.2f}%" if pd.notnull(x) else "N/A")
+                    st.dataframe(df_us, use_container_width=True)
+                else:
+                    st.warning("No holdings data available for this ETF via standard API.")
+                    
+        with tab4:
+            st.markdown("### Institutional Holdings (India)")
+            st.write("Top Indian stocks sorted by their Institutional Holding %.")
             
-            # Since LangGraph invocation can be opaque, we'll run it and display the final result.
-            # In a more advanced UI, we'd use graph.stream() to show node-by-node progress.
-            try:
-                st.write("Routing query via Supervisor...")
-                result = research_graph.invoke(initial_state)
+            holding_type = st.radio("Holding Type", ["Overall Institutional (Avg)", "FII Only", "DII Only"], horizontal=True)
+            if holding_type != "Overall Institutional (Avg)":
+                st.info("💡 Note: Free live APIs do not consistently separate FII and DII. Displaying Overall Institutional (FII + DII) fallback data.")
+
+            with st.spinner("Fetching institutional holdings data from Yahoo Finance..."):
+                # Use all Nifty 50 components dynamically
+                nifty_df = get_nifty_50_constituents()
+                if not nifty_df.empty and 'Symbol' in nifty_df.columns:
+                    sample_nifty_stocks = [sym + ".NS" for sym in nifty_df['Symbol'].tolist()[:30]] # Taking top 30 to keep API fast
+                else:
+                    sample_nifty_stocks = [
+                        "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", 
+                        "HINDUNILVR.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "KOTAKBANK.NS"
+                    ]
                 
-                agents_run = result.get('agents_called', [])
-                st.write(f"Specialists consulted: {', '.join(agents_run).title()}")
+                df_inst = get_fii_dii_holdings(sample_nifty_stocks)
+                if not df_inst.empty:
+                    st.dataframe(df_inst, use_container_width=True)
+                else:
+                    st.warning("Could not fetch institutional data.")
+                    
+        with tab5:
+            st.markdown("### Trending Stocks (US & India)")
+            st.write("Sorted by percentage change over the last 2 days.")
+            trending_pool = [
+                "NVDA", "AAPL", "MSFT", "TSLA", "META", "AMZN", "GOOGL", "AMD", "PLTR", "AVGO", "CRWD", "NFLX"
+            ]
+            
+            # Combine US pool with Nifty 50 stocks
+            nifty_df_trend = get_nifty_50_constituents()
+            if not nifty_df_trend.empty and 'Symbol' in nifty_df_trend.columns:
+                indian_pool = [sym + ".NS" for sym in nifty_df_trend['Symbol'].tolist()[:30]] # Taking top 30
+                trending_pool.extend(indian_pool)
+            else:
+                trending_pool.extend(["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ZOMATO.NS", "TATAMOTORS.NS"])
                 
-                st.write("Synthesizer drafting final report...")
+            with st.spinner("Calculating recent movements..."):
+                df_trend = get_trending_stocks(trending_pool)
+                if not df_trend.empty:
+                    st.dataframe(df_trend, use_container_width=True)
+                else:
+                    st.warning("Could not fetch trending data.")
+
+    else:
+        # Existing logic for agents
+        # Chat / Query input
+        query_map = {
+            "Full Deep Dive (Tech, Fund, News)": f"Provide a comprehensive investment research report for {ticker} including technicals, fundamentals, and recent news.",
+            "Technical Analysis Only": f"Focus only on technical analysis and price action for {ticker}.",
+            "Fundamental Analysis Only": f"Focus only on fundamental analysis, valuation, and financials for {ticker}.",
+            "News & Sentiment Only": f"Focus only on recent news and market sentiment for {ticker}.",
+            "Dividend Yield Report": f"Provide a detailed dividend yield and safety report for {ticker}.",
+            "Economic Moat Report": f"Analyze the economic moat and competitive advantages of {ticker}.",
+            "Comparison Report": f"Compare these stocks side-by-side: {ticker}.",
+            "Thematic Screener Report": f"Find stocks matching this theme: '{ticker}' and evaluate their moat and technicals."
+        }
+        
+        default_query = query_map.get(depth, f"Analyze {ticker}")
+        
+        with st.form(key="research_form"):
+            user_query = st.text_area("Custom Query (Optional)", value=default_query, height=100)
+            submit_button = st.form_submit_button(label="🚀 Run Agentic Research")
+
+        if submit_button:
+            with st.status("🧠 Agents at work...", expanded=True) as status:
                 
-                final_report = result.get("final_report", "No report generated.")
-                status.update(label="✅ Research Complete!", state="complete", expanded=False)
+                # Map UI mode to internal state mode
+                mode_map = {
+                    "Single Stock Research": "single",
+                    "Compare Stocks": "compare",
+                    "Thematic Screener": "screener"
+                }
+                internal_mode = mode_map.get(app_mode, "single")
+
+                initial_state = {
+                    "messages": [],
+                    "mode": internal_mode,
+                    "ticker": ticker,
+                    "market": market_val,
+                    "query": user_query,
+                    "agents_to_call": [],
+                    "agents_called": [],
+                    "technical_analysis": None,
+                    "fundamental_analysis": None,
+                    "news_analysis": None,
+                    "dividend_analysis": None,
+                    "moat_analysis": None,
+                    "comparison_analysis": None,
+                    "screener_analysis": None,
+                    "final_report": None,
+                    "company_name": None,
+                    "current_price": None,
+                    "error": None,
+                }
                 
-                st.markdown("### 📋 Final Research Report")
-                st.write_stream(stream_report(final_report))
-                
-                # PDF Download Button
+                # Since LangGraph invocation can be opaque, we'll run it and display the final result.
+                # In a more advanced UI, we'd use graph.stream() to show node-by-node progress.
                 try:
-                    pdf_bytes = generate_pdf_report(final_report)
-                    st.download_button(
-                        label="📄 Download PDF Report",
-                        data=pdf_bytes,
-                        file_name=f"{ticker.replace(', ', '_')}_Research_Report.pdf",
-                        mime="application/pdf",
-                        type="primary"
-                    )
-                except Exception as pdf_e:
-                    st.error(f"Failed to generate PDF: {pdf_e}")
-                
-                with st.expander("Raw Analyst Data"):
-                    if "technical" in agents_run:
-                        st.markdown(result.get("technical_analysis", ""))
-                    if "fundamental" in agents_run:
-                        st.markdown(result.get("fundamental_analysis", ""))
-                    if "news" in agents_run:
-                        st.markdown(result.get("news_analysis", ""))
-                    if "dividend" in agents_run:
-                        st.markdown(result.get("dividend_analysis", ""))
-                    if "moat" in agents_run:
-                        st.markdown(result.get("moat_analysis", ""))
-                    if "comparison" in agents_run:
-                        st.markdown(result.get("comparison_analysis", ""))
-                    if "screener" in agents_run:
-                        st.markdown(result.get("screener_analysis", ""))
-                        
-            except Exception as e:
-                status.update(label="❌ Error in Research", state="error", expanded=True)
-                st.error(f"Pipeline failed: {e}")
+                    st.write("Routing query via Supervisor...")
+                    result = research_graph.invoke(initial_state)
+                    
+                    agents_run = result.get('agents_called', [])
+                    st.write(f"Specialists consulted: {', '.join(agents_run).title()}")
+                    
+                    st.write("Synthesizer drafting final report...")
+                    
+                    final_report = result.get("final_report", "No report generated.")
+                    status.update(label="✅ Research Complete!", state="complete", expanded=False)
+                    
+                    st.markdown("### 📋 Final Research Report")
+                    st.write_stream(stream_report(final_report))
+                    
+                    with st.expander("Raw Analyst Data"):
+                        if "technical" in agents_run:
+                            st.markdown(result.get("technical_analysis", ""))
+                        if "fundamental" in agents_run:
+                            st.markdown(result.get("fundamental_analysis", ""))
+                        if "news" in agents_run:
+                            st.markdown(result.get("news_analysis", ""))
+                        if "dividend" in agents_run:
+                            st.markdown(result.get("dividend_analysis", ""))
+                        if "moat" in agents_run:
+                            st.markdown(result.get("moat_analysis", ""))
+                        if "comparison" in agents_run:
+                            st.markdown(result.get("comparison_analysis", ""))
+                        if "screener" in agents_run:
+                            st.markdown(result.get("screener_analysis", ""))
+                            
+                except Exception as e:
+                    status.update(label="❌ Error in Research", state="error", expanded=True)
+                    st.error(f"Pipeline failed: {e}")
