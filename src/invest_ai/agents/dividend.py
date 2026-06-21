@@ -42,3 +42,112 @@ def dividend_node(state: ResearchState) -> dict:
         analysis = f"Dividend analysis failed: {e}"
 
     return {"dividend_analysis": analysis, "agents_called": ["dividend"]}
+
+
+def run_dividend_planner_agent(
+    candidates_df, 
+    num_stocks: int, 
+    target_income: float, 
+    frequency: str, 
+    market: str, 
+    preferences: str = ""
+) -> tuple[list[str], str]:
+    """
+    Invokes the ChatOllama LLM to select exactly num_stocks from candidates_df.
+    Returns:
+        (selected_tickers_list, explanation_markdown)
+    """
+    from langchain_core.messages import SystemMessage, HumanMessage
+    import json
+    import re
+    
+    currency = "₹" if market == "india" else "$"
+    
+    # Format candidates list for the agent
+    candidates_list = []
+    for idx, row in candidates_df.iterrows():
+        candidates_list.append(
+            f"- {row['Symbol']}: {row['Name']} | Price: {currency}{row['Price']} | Yield: {row['Yield (%)']}% | Payout Ratio: {row['Payout Ratio (%)']}% | Sector: {row['Sector']}"
+        )
+    candidates_str = "\n".join(candidates_list)
+    
+    prompt = f"""You are an expert dividend portfolio architect.
+Your task is to select the best {num_stocks} stocks from the candidate list below for a dividend growth portfolio.
+
+The user's goal is:
+- Target income: {target_income} {currency} per {frequency}
+- Market: {market.upper()}
+- Preferences/Constraints: {preferences if preferences else "None"}
+
+Candidate Pool:
+{candidates_str}
+
+Please select exactly {num_stocks} stocks.
+Prioritize:
+1. High and sustainable dividend yields.
+2. Reasonable payout ratios (typically under 80% is safer, but utilities/REITs can be higher; for Indian PSUs, payout ratios can be higher but backed by govt/monopolistic earnings).
+3. Sector diversification (do not put all selected stocks in one sector).
+4. Stable business models with potential for future dividend growth.
+
+Your response MUST be in two parts:
+1. A JSON list of the selected ticker symbols at the very beginning of your response, inside a code block tagged with 'json'. Example:
+```json
+[
+  "TICKER1",
+  "TICKER2"
+]
+```
+2. A detailed markdown analysis explaining:
+   - Why you chose this particular set of stocks.
+   - Sector distribution and risk assessment.
+   - Key highlights for each selected stock (yield, payout ratio, safety).
+   - Advice on building and managing this dividend income stream.
+"""
+
+    llm = ChatOllama(
+        model=MODEL_NAME,
+        base_url=OLLAMA_BASE_URL,
+        temperature=MODEL_TEMPERATURE,
+    )
+    
+    messages = [
+        SystemMessage(content="You are a professional equity research and dividend portfolio specialist."),
+        HumanMessage(content=prompt)
+    ]
+    
+    selected_tickers = []
+    explanation = ""
+    try:
+        response = llm.invoke(messages)
+        content = response.content.strip()
+        explanation = content
+        
+        # Try to extract JSON code block
+        match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
+        if match:
+            tickers = json.loads(match.group(1))
+            if isinstance(tickers, list):
+                selected_tickers = [t.strip().upper() for t in tickers]
+        else:
+            # Fallback regex search for anything that looks like JSON list
+            match_list = re.search(r"\[\s*\"[A-Z0-9.\-]+\"(?:\s*,\s*\"[A-Z0-9.\-]+\")*\s*\]", content)
+            if match_list:
+                tickers = json.loads(match_list.group(0))
+                selected_tickers = [t.strip().upper() for t in tickers]
+    except Exception as e:
+        explanation = f"Agent selection failed: {e}\nFalling back to top dividend yield stocks."
+        
+    # Clean selected tickers to make sure they are in the candidates list
+    valid_symbols = set(candidates_df["Symbol"].tolist())
+    selected_tickers = [t for t in selected_tickers if t in valid_symbols]
+    
+    # Fallback to top N by yield if selection is empty or less than expected
+    if len(selected_tickers) < num_stocks:
+        top_yields = candidates_df.head(num_stocks)["Symbol"].tolist()
+        for t in top_yields:
+            if t not in selected_tickers:
+                selected_tickers.append(t)
+        selected_tickers = selected_tickers[:num_stocks]
+        
+    return selected_tickers, explanation
+

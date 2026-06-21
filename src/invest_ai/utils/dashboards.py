@@ -152,3 +152,78 @@ def get_trending_stocks(symbols: list) -> pd.DataFrame:
     if not df.empty:
         df = df.sort_values('% Change', ascending=False)
     return df
+
+@st.cache_data(ttl=3600)
+def get_dividend_candidate_data(market: str) -> pd.DataFrame:
+    import concurrent.futures
+    if market == "us":
+        candidates = [
+            "SCHD", "JEPI", "T", "VZ", "MO", "PM", "O", "ABBV", "JNJ", "PG",
+            "KO", "PEP", "XOM", "CVX", "MAIN", "WPC", "IBM", "MMM", "PFE", "NEE",
+            "EPD", "BTI", "LMT", "AVGO", "ENB", "ET", "FRT", "ADC"
+        ]
+    else: # india
+        candidates = [
+            "COALINDIA.NS", "RECLTD.NS", "PFC.NS", "ONGC.NS", "IOC.NS", "BPCL.NS",
+            "VEDL.NS", "HINDZINC.NS", "ITC.NS", "TCS.NS", "INFY.NS", "POWERGRID.NS",
+            "GAIL.NS", "NTPC.NS", "HCLTECH.NS", "OIL.NS", "NMDC.NS", "SJVN.NS",
+            "NHPC.NS", "IRFC.NS", "HUDCO.NS", "PETRONET.NS", "MUTHOOTFIN.NS",
+            "TATASTEEL.NS", "HINDALCO.NS"
+        ]
+        
+    def fetch_data(symbol):
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            
+            # extract yield
+            dy = info.get("dividendYield")
+            if dy is not None:
+                dy = round(dy * 100, 2)
+            else:
+                dy = 0.0
+                
+            # extract payout ratio
+            pr = info.get("payoutRatio")
+            if pr is not None:
+                pr = round(pr * 100, 2)
+            else:
+                pr = 0.0
+                
+            price = info.get("currentPrice") or info.get("regularMarketPrice") or 0.0
+            div_rate = info.get("dividendRate") or 0.0
+            
+            # Fallback if yield is 0 but rate and price exist
+            if dy == 0.0 and div_rate > 0 and price > 0:
+                dy = round((div_rate / price) * 100, 2)
+                
+            # If rate is 0 but yield and price exist
+            if div_rate == 0.0 and dy > 0 and price > 0:
+                div_rate = round((dy / 100) * price, 2)
+
+            return {
+                "Symbol": symbol,
+                "Name": info.get("longName") or info.get("shortName") or symbol,
+                "Price": price,
+                "Yield (%)": dy,
+                "Payout Ratio (%)": pr,
+                "Dividend Rate": div_rate,
+                "Sector": info.get("sector", "N/A"),
+                "Industry": info.get("industry", "N/A")
+            }
+        except Exception:
+            return None
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(fetch_data, sym): sym for sym in candidates}
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res is not None and res["Price"] > 0:
+                results.append(res)
+                
+    df = pd.DataFrame(results)
+    # Sort by yield descending
+    if not df.empty:
+        df = df.sort_values("Yield (%)", ascending=False).reset_index(drop=True)
+    return df

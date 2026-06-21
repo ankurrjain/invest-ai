@@ -92,7 +92,7 @@ def stream_report(text):
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     
-    app_mode = st.radio("Mode", ["Single Stock Research", "Compare Stocks", "Thematic Screener", "Dashboards", "Live Intelligence Report", "Live News Report"])
+    app_mode = st.radio("Mode", ["Single Stock Research", "Compare Stocks", "Thematic Screener", "Dashboards", "Dividend Target Planner", "Live Intelligence Report", "Live News Report"])
     
     market = st.radio("Target Market", ["India (NSE/BSE)", "US (NYSE/NASDAQ)"])
     market_val = "india" if "India" in market else "us"
@@ -114,6 +114,14 @@ with st.sidebar:
     elif app_mode == "Dashboards":
         st.markdown("Explore comprehensive dashboards for ETFs and stock trends.")
         raw_ticker = "Dashboards"  # Dummy value to pass the 'if not raw_ticker' check
+        depth = "N/A"
+    elif app_mode == "Dividend Target Planner":
+        st.markdown("Plan your dividend investment portfolio to reach your targets.")
+        div_target = st.number_input("Target Dividend Income", min_value=1.0, value=12000.0 if market_val == "us" else 120000.0, step=500.0)
+        target_freq = st.selectbox("Target Frequency", ["Annual", "Monthly"])
+        num_stocks = st.slider("Number of High-Dividend Stocks", min_value=3, max_value=15, value=5)
+        pref_prompt = st.text_area("Custom Constraints / Preferences", placeholder="e.g. Focus on safety and sector diversity")
+        raw_ticker = "DividendPlanner"
         depth = "N/A"
     elif app_mode == "Live Intelligence Report":
         raw_ticker = st.text_input("Enter Ticker Symbol", placeholder="e.g. AAPL or RELIANCE").upper()
@@ -292,6 +300,264 @@ else:
                     st.dataframe(df_trend, use_container_width=True)
                 else:
                     st.warning("Could not fetch trending data.")
+
+    elif app_mode == "Dividend Target Planner":
+        st.subheader("🎯 Dividend Target Planner")
+        st.write("Let the Agent select high-dividend stocks and allocate your investment to reach your target dividend income, then project compound growth over 5 and 10 years.")
+        
+        # User parameters inside main pane
+        col_g1, col_g2, col_g3 = st.columns(3)
+        with col_g1:
+            exp_cap_appr = st.number_input(
+                "Expected Capital Appreciation (%/yr)",
+                min_value=0.0, max_value=30.0,
+                value=7.0 if market_val == "us" else 10.0,
+                step=0.5
+            )
+        with col_g2:
+            exp_div_growth = st.number_input(
+                "Expected Dividend Growth (%/yr)",
+                min_value=0.0, max_value=25.0,
+                value=5.0 if market_val == "us" else 6.0,
+                step=0.5
+            )
+        with col_g3:
+            alloc_strategy = st.selectbox("Allocation Strategy", ["Equal Weight", "Yield-Weighted"])
+
+        run_planner = st.button("🚀 Run Agentic Dividend Planner", type="primary", use_container_width=True)
+        
+        if run_planner:
+            # Step 1: Fetch candidate data
+            with st.spinner("Fetching live candidate dividend stocks..."):
+                from invest_ai.utils.dashboards import get_dividend_candidate_data
+                candidates_df = get_dividend_candidate_data(market_val)
+                
+            if candidates_df.empty:
+                st.error("Could not fetch candidate stocks from Yahoo Finance.")
+            else:
+                # Step 2: Call Agent to select stocks
+                with st.status("🤖 Agent analyzing dividend profiles and selecting stocks...", expanded=True) as status:
+                    from invest_ai.agents.dividend import run_dividend_planner_agent
+                    st.write("🔄 Evaluating candidate yields and payout ratios...")
+                    st.write(f"📊 Screening for {num_stocks} stocks with sector diversification...")
+                    selected_tickers, explanation = run_dividend_planner_agent(
+                        candidates_df=candidates_df,
+                        num_stocks=num_stocks,
+                        target_income=div_target,
+                        frequency=target_freq,
+                        market=market_val,
+                        preferences=pref_prompt
+                    )
+                    status.update(label="✅ Agent Portfolio Design Complete!", state="complete", expanded=False)
+                
+                # Check that we got stocks
+                selected_df = candidates_df[candidates_df["Symbol"].isin(selected_tickers)].copy()
+                if selected_df.empty:
+                    # Fallback to top N
+                    selected_df = candidates_df.head(num_stocks).copy()
+                    selected_tickers = selected_df["Symbol"].tolist()
+                    st.warning("Agent selection was empty or invalid. Fell back to highest yield candidate stocks.")
+                
+                st.markdown("### 📋 Agent Selection & Investment Allocation")
+                
+                # Calculate weights and allocations
+                N = len(selected_df)
+                if alloc_strategy == "Equal Weight":
+                    selected_df["Weight (%)"] = 100.0 / N
+                else:  # Yield-Weighted
+                    total_yield = selected_df["Yield (%)"].sum()
+                    if total_yield > 0:
+                        selected_df["Weight (%)"] = (selected_df["Yield (%)"] / total_yield) * 100.0
+                    else:
+                        selected_df["Weight (%)"] = 100.0 / N
+                
+                # Portfolio Average Yield (weighted sum)
+                portfolio_avg_yield = (selected_df["Yield (%)"] * selected_df["Weight (%)"] / 100.0).sum()
+                
+                # Required Investment
+                target_annual = div_target if target_freq == "Annual" else div_target * 12
+                required_total_inv = target_annual / (portfolio_avg_yield / 100.0) if portfolio_avg_yield > 0 else 0.0
+                
+                # Allocations per stock
+                selected_df["Investment Amount"] = selected_df["Weight (%)"] / 100.0 * required_total_inv
+                selected_df["Shares to Buy"] = selected_df.apply(
+                    lambda r: int(r["Investment Amount"] / r["Price"]) if r["Price"] > 0 else 0,
+                    axis=1
+                )
+                selected_df["Expected Year 1 Dividend"] = selected_df["Shares to Buy"] * selected_df["Dividend Rate"]
+                
+                # Formatting currency
+                cur = "₹" if market_val == "india" else "$"
+                
+                # Summary Metric Cards
+                c_m1, c_m2, c_m3 = st.columns(3)
+                c_m1.metric("Required Total Investment", f"{cur}{required_total_inv:,.2f}")
+                c_m2.metric("Portfolio Weighted Yield", f"{portfolio_avg_yield:.2f}%")
+                c_m3.metric("Expected Year 1 Dividend", f"{cur}{selected_df['Expected Year 1 Dividend'].sum():,.2f}")
+                
+                # Display table
+                disp_df = selected_df[[
+                    "Symbol", "Name", "Price", "Yield (%)", "Payout Ratio (%)",
+                    "Weight (%)", "Investment Amount", "Shares to Buy", "Expected Year 1 Dividend"
+                ]].copy()
+                
+                # Format columns
+                disp_df["Price"] = disp_df["Price"].apply(lambda x: f"{cur}{x:,.2f}")
+                disp_df["Yield (%)"] = disp_df["Yield (%)"].apply(lambda x: f"{x:.2f}%")
+                disp_df["Payout Ratio (%)"] = disp_df["Payout Ratio (%)"].apply(lambda x: f"{x:.2f}%")
+                disp_df["Weight (%)"] = disp_df["Weight (%)"].apply(lambda x: f"{x:.2f}%")
+                disp_df["Investment Amount"] = disp_df["Investment Amount"].apply(lambda x: f"{cur}{x:,.2f}")
+                disp_df["Expected Year 1 Dividend"] = disp_df["Expected Year 1 Dividend"].apply(lambda x: f"{cur}{x:,.2f}")
+                
+                st.dataframe(disp_df, use_container_width=True, hide_index=True)
+                
+                # Agent Explanation
+                with st.expander("🔬 View Agent Analyst Reasoning"):
+                    st.markdown(explanation)
+                
+                # --- Growth Projections (5 and 10 years) ---
+                st.markdown("### 📈 Dividend & Portfolio Growth Projections")
+                st.write("Below are the 5 and 10-year projection models comparing **Dividend Reinvestment (DRIP)** vs **Cash Payout (No Reinvestment)**.")
+                
+                # Projections Math
+                proj_data = []
+                
+                # Case A: Reinvestment (DRIP)
+                shares_drip = selected_df["Shares to Buy"].tolist()
+                prices_start = selected_df["Price"].tolist()
+                div_rates_start = selected_df["Dividend Rate"].tolist()
+                weights = [w / 100.0 for w in selected_df["Weight (%)"].tolist()]
+                
+                # Case B: No Reinvestment
+                shares_no_reinvest = selected_df["Shares to Buy"].tolist()
+                
+                # Year 0 initial state
+                proj_data.append({
+                    "Year": 0,
+                    "Portfolio Value (No Reinvestment)": required_total_inv,
+                    "Annual Dividend (No Reinvestment)": selected_df["Expected Year 1 Dividend"].sum(),
+                    "Portfolio Value (DRIP Reinvestment)": required_total_inv,
+                    "Annual Dividend (DRIP Reinvestment)": selected_df["Expected Year 1 Dividend"].sum(),
+                })
+                
+                for yr in range(1, 11):
+                    # Stock prices and dividends increase
+                    current_prices = [p * ((1 + exp_cap_appr / 100.0) ** yr) for p in prices_start]
+                    current_div_rates = [d * ((1 + exp_div_growth / 100.0) ** yr) for d in div_rates_start]
+                    
+                    # 1. No Reinvestment
+                    val_no_reinvest = sum(s * p for s, p in zip(shares_no_reinvest, current_prices))
+                    div_no_reinvest = sum(s * d for s, d in zip(shares_no_reinvest, current_div_rates))
+                    
+                    # 2. DRIP Reinvestment
+                    # Calculate dividend income for this year using previous year's shares
+                    year_div_income = sum(s * d for s, d in zip(shares_drip, current_div_rates))
+                    
+                    # Reinvest this income into buying more shares at current prices
+                    new_shares_bought = []
+                    for i in range(len(shares_drip)):
+                        reinvest_amt = weights[i] * year_div_income
+                        price_per_share = current_prices[i]
+                        new_shares = reinvest_amt / price_per_share if price_per_share > 0 else 0
+                        new_shares_bought.append(new_shares)
+                    
+                    # Update shares
+                    shares_drip = [s + ns for s, ns in zip(shares_drip, new_shares_bought)]
+                    
+                    # Portfolio Value is the sum of updated shares times current price
+                    val_drip = sum(s * p for s, p in zip(shares_drip, current_prices))
+                    # Next year's dividend rate * current shares
+                    div_drip = sum(s * d for s, d in zip(shares_drip, current_div_rates))
+                    
+                    proj_data.append({
+                        "Year": yr,
+                        "Portfolio Value (No Reinvestment)": val_no_reinvest,
+                        "Annual Dividend (No Reinvestment)": div_no_reinvest,
+                        "Portfolio Value (DRIP Reinvestment)": val_drip,
+                        "Annual Dividend (DRIP Reinvestment)": div_drip,
+                    })
+                    
+                df_proj = pd.DataFrame(proj_data)
+                
+                # Display 5 and 10 year projection stats
+                y5 = df_proj[df_proj["Year"] == 5].iloc[0]
+                y10 = df_proj[df_proj["Year"] == 10].iloc[0]
+                
+                col_sum1, col_sum2 = st.columns(2)
+                with col_sum1:
+                    st.markdown("**Without Reinvesting Dividends (Cash Payout):**")
+                    summary_payout = pd.DataFrame([
+                        {"Timeframe": "Initial (Year 0)", "Portfolio Value": f"{cur}{required_total_inv:,.2f}", "Annual Dividend": f"{cur}{df_proj.loc[0, 'Annual Dividend (No Reinvestment)']:,.2f}"},
+                        {"Timeframe": "Year 5", "Portfolio Value": f"{cur}{y5['Portfolio Value (No Reinvestment)']:,.2f}", "Annual Dividend": f"{cur}{y5['Annual Dividend (No Reinvestment)']:,.2f}"},
+                        {"Timeframe": "Year 10", "Portfolio Value": f"{cur}{y10['Portfolio Value (No Reinvestment)']:,.2f}", "Annual Dividend": f"{cur}{y10['Annual Dividend (No Reinvestment)']:,.2f}"},
+                    ])
+                    st.dataframe(summary_payout, use_container_width=True, hide_index=True)
+                with col_sum2:
+                    st.markdown("**With DRIP Reinvestment (Compound Growth):**")
+                    summary_drip = pd.DataFrame([
+                        {"Timeframe": "Initial (Year 0)", "Portfolio Value": f"{cur}{required_total_inv:,.2f}", "Annual Dividend": f"{cur}{df_proj.loc[0, 'Annual Dividend (DRIP Reinvestment)']:,.2f}"},
+                        {"Timeframe": "Year 5", "Portfolio Value": f"{cur}{y5['Portfolio Value (DRIP Reinvestment)']:,.2f}", "Annual Dividend": f"{cur}{y5['Annual Dividend (DRIP Reinvestment)']:,.2f}"},
+                        {"Timeframe": "Year 10", "Portfolio Value": f"{cur}{y10['Portfolio Value (DRIP Reinvestment)']:,.2f}", "Annual Dividend": f"{cur}{y10['Annual Dividend (DRIP Reinvestment)']:,.2f}"},
+                    ])
+                    st.dataframe(summary_drip, use_container_width=True, hide_index=True)
+                
+                # Plotly Charts
+                fig_val = go.Figure()
+                fig_val.add_trace(go.Scatter(
+                    x=df_proj["Year"], 
+                    y=df_proj["Portfolio Value (DRIP Reinvestment)"],
+                    mode='lines+markers',
+                    name='DRIP Reinvestment (Compound)',
+                    line=dict(color='#22c55e', width=3)
+                ))
+                fig_val.add_trace(go.Scatter(
+                    x=df_proj["Year"], 
+                    y=df_proj["Portfolio Value (No Reinvestment)"],
+                    mode='lines+markers',
+                    name='No Reinvestment (Cash Outflow)',
+                    line=dict(color='#e94560', width=2, dash='dash')
+                ))
+                fig_val.update_layout(
+                    title="Portfolio Value Projection (10 Years)",
+                    xaxis_title="Years",
+                    yaxis_title=f"Portfolio Value ({cur})",
+                    template="plotly_dark",
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    height=400,
+                )
+                
+                fig_div = go.Figure()
+                fig_div.add_trace(go.Scatter(
+                    x=df_proj["Year"], 
+                    y=df_proj["Annual Dividend (DRIP Reinvestment)"],
+                    mode='lines+markers',
+                    name='DRIP Reinvestment (Compound)',
+                    line=dict(color='#3b82f6', width=3)
+                ))
+                fig_div.add_trace(go.Scatter(
+                    x=df_proj["Year"], 
+                    y=df_proj["Annual Dividend (No Reinvestment)"],
+                    mode='lines+markers',
+                    name='No Reinvestment (Cash Outflow)',
+                    line=dict(color='#f59e0b', width=2, dash='dash')
+                ))
+                fig_div.update_layout(
+                    title="Annual Dividend Income Projection (10 Years)",
+                    xaxis_title="Years",
+                    yaxis_title=f"Annual Dividend ({cur})",
+                    template="plotly_dark",
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    height=400,
+                )
+                
+                st.plotly_chart(fig_val, use_container_width=True)
+                st.plotly_chart(fig_div, use_container_width=True)
+                
+                # Highlight of reinvestment benefits
+                drip_diff_val = y10['Portfolio Value (DRIP Reinvestment)'] - y10['Portfolio Value (No Reinvestment)']
+                drip_diff_div = y10['Annual Dividend (DRIP Reinvestment)'] - y10['Annual Dividend (No Reinvestment)']
+                
+                st.success(f"💡 **Reinvestment Power:** In 10 years, choosing to **reinvest dividends (DRIP)** results in an extra **{cur}{drip_diff_val:,.2f}** in portfolio value and an additional **{cur}{drip_diff_div:,.2f}** in annual dividend income compared to withdrawing cash dividends!")
 
     elif app_mode == "Live Intelligence Report":
         ticker = resolve_ticker(raw_ticker, market_val)
