@@ -9,6 +9,8 @@ from datetime import datetime
 from invest_ai.agents.graph import research_graph
 from invest_ai.utils.ticker import resolve_ticker, get_currency_symbol
 from invest_ai.utils.pdf import generate_pdf_report
+from invest_ai.utils.holdings import parse_holdings_excel, aggregate_portfolio_data
+from invest_ai.agents.portfolio import run_portfolio_review_agent
 from invest_ai.utils.dashboards import (
     get_us_etf_holdings,
     get_nifty_50_constituents,
@@ -92,7 +94,7 @@ def stream_report(text):
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     
-    app_mode = st.radio("Mode", ["Single Stock Research", "Compare Stocks", "Thematic Screener", "Dashboards", "Dividend Target Planner", "Live Intelligence Report", "Live News Report"])
+    app_mode = st.radio("Mode", ["Single Stock Research", "Compare Stocks", "Thematic Screener", "Dashboards", "Dividend Target Planner", "Live Intelligence Report", "Live News Report", "Family Portfolio Review"])
     
     market = st.radio("Target Market", ["India (NSE/BSE)", "US (NYSE/NASDAQ)"])
     market_val = "india" if "India" in market else "us"
@@ -141,6 +143,14 @@ with st.sidebar:
             <span style='color:#a0aec0; font-size:0.85rem;'> Fetches real-time news, sentiment, breaking developments,
             and live event intelligence from news sources.</span>
             </div>""", unsafe_allow_html=True)
+    elif app_mode == "Family Portfolio Review":
+        st.markdown("""<div style='background: linear-gradient(135deg, #1e1b4b, #311042);
+            border: 1px solid #c084fc; border-radius: 8px; padding: 10px; margin-top: 8px;'>
+            <span style='color:#c084fc; font-weight:700;'>💼 PORTFOLIO</span>
+            <span style='color:#cbd5e1; font-size:0.85rem;'> Analyze family asset classes, holdings allocations, categories, and generate strategic reviews.</span>
+            </div>""", unsafe_allow_html=True)
+        raw_ticker = "PortfolioReview"
+        depth = "N/A"
     else:
         raw_ticker = st.text_input("Enter Investment Theme", placeholder="e.g. AI Semiconductors or Renewable Energy")
         depth = "Thematic Screener Report"
@@ -817,6 +827,266 @@ else:
                 except Exception as e:
                     status.update(label="❌ Live News Intelligence Failed", state="error", expanded=True)
                     st.error(f"Pipeline failed: {e}")
+
+    elif app_mode == "Family Portfolio Review":
+        st.subheader("💼 Family Portfolio Analyzer & Review")
+        
+        # File uploader
+        uploaded_file = st.file_uploader("Upload Family Holdings Excel File", type=["xlsx", "xls"])
+        
+        if uploaded_file is not None:
+            with st.spinner("Analyzing spreadsheet data..."):
+                try:
+                    holdings_df, report_df = parse_holdings_excel(uploaded_file)
+                    portfolio = aggregate_portfolio_data(holdings_df, report_df)
+                except Exception as parse_err:
+                    st.error(f"Failed to parse holdings file: {parse_err}")
+                    portfolio = None
+        else:
+            st.info("👈 Please upload your family holdings Excel file (`.xlsx` or `.xls`) to begin the portfolio analysis and review.")
+            portfolio = None
+            
+        if portfolio:
+            # 1. Metric Cards
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1:
+                st.metric("Total Portfolio Value", f"₹{portfolio['total_market_value']:,.2f}")
+            with col_m2:
+                st.metric("Total Invested Cost", f"₹{portfolio['total_invested']:,.2f}")
+            with col_m3:
+                gain_val = portfolio['total_gain']
+                gain_pct = portfolio['total_gain_pct']
+                st.metric("Total Gain/Loss", f"₹{gain_val:+,.2f}", f"{gain_pct:+.2f}%")
+            with col_m4:
+                # Liquid assets MV vs total MV
+                liquid_mv = (
+                    portfolio['asset_class_mv_map'].get('Equity', 0) +
+                    portfolio['asset_class_mv_map'].get('Global Equity', 0) +
+                    portfolio['asset_class_mv_map'].get('Gold', 0) +
+                    portfolio['asset_class_mv_map'].get('Silver', 0) +
+                    portfolio['asset_class_mv_map'].get('Liquid', 0)
+                )
+                liquid_pct = (liquid_mv / portfolio['total_market_value'] * 100) if portfolio['total_market_value'] > 0 else 0
+                st.metric("Liquid Net Worth %", f"{liquid_pct:.1f}%")
+                
+            tab_ac, tab_stock, tab_ai = st.tabs([
+                "📊 Asset Allocation",
+                "📈 Stock Holdings (Deep Dive)",
+                "🤖 AI Portfolio Review"
+            ])
+            
+            with tab_ac:
+                st.markdown("### 📊 Asset Class Distribution")
+                st.write("Allocation of all family assets including real estate, retirement funds, vehicle, and cash.")
+                
+                col_chart, col_table = st.columns([3, 2])
+                
+                with col_chart:
+                    # Plotly pie chart of asset classes
+                    df_ac = portfolio['asset_class_df']
+                    fig_ac = go.Figure(data=[go.Pie(
+                        labels=df_ac['Asset Class'],
+                        values=df_ac['Market Value'],
+                        hole=.3,
+                        textinfo='percent+label',
+                        marker=dict(colors=['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#6366f1', '#14b8a6', '#f43f5e'])
+                    )])
+                    fig_ac.update_layout(
+                        template="plotly_dark",
+                        margin=dict(l=0, r=0, t=30, b=0),
+                        height=400,
+                        showlegend=False
+                    )
+                    st.plotly_chart(fig_ac, use_container_width=True)
+                    
+                with col_table:
+                    # Cleaned table representation
+                    st.markdown("#### Allocation Summary")
+                    df_ac_disp = df_ac.copy()
+                    df_ac_disp['Market Value'] = df_ac_disp['Market Value'].apply(lambda x: f"₹{x:,.2f}")
+                    df_ac_disp['Invested'] = df_ac_disp['Invested'].apply(lambda x: f"₹{x:,.2f}")
+                    df_ac_disp['Gain/Loss'] = df_ac_disp['Gain/Loss'].apply(lambda x: f"₹{x:+,.2f}")
+                    df_ac_disp['Gain/Loss %'] = df_ac_disp['Gain/Loss %'].apply(lambda x: f"{x:.2f}%")
+                    df_ac_disp['Allocation (%)'] = df_ac_disp['Allocation (%)'].apply(lambda x: f"{x:.2f}%")
+                    st.dataframe(df_ac_disp, use_container_width=True, hide_index=True)
+                    
+                # Liquid vs Illiquid assets callout
+                st.markdown("---")
+                col_l1, col_l2 = st.columns(2)
+                with col_l1:
+                    st.info(f"💧 **Liquid Assets:** ₹{liquid_mv:,.2f} ({liquid_pct:.1f}%) — Stock, Global Stock, Gold, Silver, Savings Cash.")
+                with col_l2:
+                    illiquid_mv = portfolio['total_market_value'] - liquid_mv
+                    illiquid_pct = 100 - liquid_pct
+                    st.warning(f"🏠 **Illiquid Assets:** ₹{illiquid_mv:,.2f} ({illiquid_pct:.1f}%) — Real Estate, Retirement (EPF), Vehicle, ESOPs.")
+                    
+            with tab_stock:
+                st.markdown("### 📈 Direct Equity & Market Holdings")
+                st.write("Detailed view of stock market investments (Indian stocks, US stocks, Gold and Silver funds).")
+                
+                df_h = portfolio['clean_holdings_df']
+                
+                if df_h is not None and not df_h.empty:
+                    # Charts row
+                    col_c1, col_c2 = st.columns(2)
+                    
+                    with col_c1:
+                        # Cap-size distribution
+                        df_cat = portfolio['category_df']
+                        fig_cat = go.Figure(data=[go.Bar(
+                            x=df_cat['Category'],
+                            y=df_cat['Market Value'],
+                            marker_color='#3b82f6',
+                            text=[f"{val:.1f}%" for val in df_cat['Allocation (%)']],
+                            textposition='auto',
+                        )])
+                        fig_cat.update_layout(
+                            title="Cap-Size Allocation (Market Value)",
+                            template="plotly_dark",
+                            yaxis_title="Market Value (₹)",
+                            xaxis_title="Category",
+                            margin=dict(l=20, r=20, t=40, b=20),
+                            height=300
+                        )
+                        st.plotly_chart(fig_cat, use_container_width=True)
+                        
+                    with col_c2:
+                        # Broker distribution
+                        df_brk = portfolio['broker_df']
+                        fig_brk = go.Figure(data=[go.Pie(
+                            labels=df_brk['Broker'],
+                            values=df_brk['Market Value'],
+                            hole=.3,
+                            textinfo='percent+label',
+                            marker=dict(colors=['#10b981', '#f59e0b'])
+                        )])
+                        fig_brk.update_layout(
+                            title="Broker / Custody Split",
+                            template="plotly_dark",
+                            margin=dict(l=20, r=20, t=40, b=20),
+                            height=300,
+                            showlegend=False
+                        )
+                        st.plotly_chart(fig_brk, use_container_width=True)
+                        
+                    # Top Holdings Horizontal Bar Chart
+                    st.markdown("#### Top 10 Stock Holdings by Market Value")
+                    df_top = portfolio['top_holdings_df']
+                    fig_top = go.Figure(data=[go.Bar(
+                        y=df_top['Investment'],
+                        x=df_top['Market Value'],
+                        orientation='h',
+                        marker_color='#10b981',
+                        text=[f"₹{val:,.0f}" for val in df_top['Market Value']],
+                        textposition='inside',
+                    )])
+                    fig_top.update_layout(
+                        template="plotly_dark",
+                        margin=dict(l=20, r=20, t=30, b=20),
+                        height=350,
+                        yaxis=dict(autorange="reversed"),
+                        xaxis_title="Market Value (₹)"
+                    )
+                    st.plotly_chart(fig_top, use_container_width=True)
+                    
+                    # Search and filters for individual holdings table
+                    st.markdown("#### 🔍 Filter Stock Holdings")
+                    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+                    
+                    with col_f1:
+                        unique_ac = ["All"] + sorted(list(df_h['Asset Class'].unique()))
+                        f_ac = st.selectbox("Filter Asset Class", unique_ac)
+                    with col_f2:
+                        unique_cat = ["All"] + sorted(list(df_h['Category'].unique()))
+                        f_cat = st.selectbox("Filter Category", unique_cat)
+                    with col_f3:
+                        unique_brk = ["All"] + sorted(list(df_h['Broker'].unique()))
+                        f_brk = st.selectbox("Filter Broker", unique_brk)
+                    with col_f4:
+                        unique_mem = ["All"] + sorted(list(df_h['First Name'].unique()))
+                        f_mem = st.selectbox("Filter Family Member", unique_mem)
+                        
+                    search_term = st.text_input("Search Investment Name", placeholder="e.g. Reliance, Apple...")
+                    
+                    # Apply filters
+                    filtered_df = df_h.copy()
+                    if f_ac != "All":
+                        filtered_df = filtered_df[filtered_df['Asset Class'] == f_ac]
+                    if f_cat != "All":
+                        filtered_df = filtered_df[filtered_df['Category'] == f_cat]
+                    if f_brk != "All":
+                        filtered_df = filtered_df[filtered_df['Broker'] == f_brk]
+                    if f_mem != "All":
+                        filtered_df = filtered_df[filtered_df['First Name'] == f_mem]
+                    if search_term:
+                        filtered_df = filtered_df[filtered_df['Investment'].str.contains(search_term, case=False, na=False)]
+                        
+                    # Format columns for display
+                    df_h_disp = filtered_df.copy()
+                    cols_to_show = ["Investment", "Asset Class", "Category", "Broker", "Total Units", "Invested Amount", "Market Value", "Total Gain/Loss (INR)", "Total Gain/Loss (%)"]
+                    
+                    cols_to_show = [c for c in cols_to_show if c in df_h_disp.columns]
+                    df_h_disp = df_h_disp[cols_to_show]
+                    
+                    df_h_disp['Invested Amount'] = df_h_disp['Invested Amount'].apply(lambda x: f"₹{x:,.2f}")
+                    df_h_disp['Market Value'] = df_h_disp['Market Value'].apply(lambda x: f"₹{x:,.2f}")
+                    if 'Total Gain/Loss (INR)' in df_h_disp.columns:
+                        df_h_disp['Total Gain/Loss (INR)'] = df_h_disp['Total Gain/Loss (INR)'].apply(lambda x: f"₹{x:+,.2f}")
+                    if 'Total Gain/Loss (%)' in df_h_disp.columns:
+                        df_h_disp['Total Gain/Loss (%)'] = df_h_disp['Total Gain/Loss (%)'].apply(lambda x: f"{x:+.2f}%")
+                    if 'Total Units' in df_h_disp.columns:
+                        df_h_disp['Total Units'] = df_h_disp['Total Units'].apply(lambda x: f"{x:,.4f}")
+                        
+                    st.dataframe(df_h_disp, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("No detailed holdings data found in the spreadsheet.")
+                    
+            with tab_ai:
+                st.markdown("### 🤖 Agentic Portfolio Review")
+                st.write("Let the Portfolio Analyst Agent audit your asset allocation, evaluate risks, and draft actionable strategic recommendations.")
+                
+                with st.form(key="portfolio_agent_form"):
+                    focus_query = st.text_area(
+                        "Review Focus Area (Optional)",
+                        placeholder="e.g. Assess my exposure to small caps, critique my US vs. India equity allocation split, and recommend rebalancing steps.",
+                        height=100
+                    )
+                    run_review = st.form_submit_button("🧠 Generate Agentic Portfolio Review", type="primary", use_container_width=True)
+                    
+                if run_review:
+                    with st.status("🧠 Portfolio Analyst Agent at work...", expanded=True) as status:
+                        st.write("📊 Digesting total portfolio allocations...")
+                        st.write("🔍 Auditing stock cap-size categories & concentrations...")
+                        st.write("⚖️ Evaluating Indian vs. Global equity balance...")
+                        st.write("🏢 Evaluating liquid vs. fixed assets...")
+                        st.write("🤖 Modeling rebalancing recommendations...")
+                        
+                        try:
+                            review_report = run_portfolio_review_agent(portfolio, focus_query)
+                            status.update(label="✅ Portfolio Review Complete!", state="complete", expanded=False)
+                            
+                            st.markdown(review_report)
+                            
+                            st.session_state["portfolio_review_report"] = review_report
+                        except Exception as e:
+                            status.update(label="❌ Review Failed", state="error", expanded=True)
+                            st.error(f"Failed to generate review: {e}")
+                            
+                if "portfolio_review_report" in st.session_state and st.session_state["portfolio_review_report"]:
+                    st.markdown("---")
+                    st.markdown("### 📥 Download Portfolio Review Report")
+                    try:
+                        pdf_bytes = generate_pdf_report(st.session_state["portfolio_review_report"])
+                        filename = f"portfolio_review_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                        st.download_button(
+                            label="📄 Download Portfolio Review PDF",
+                            data=pdf_bytes,
+                            file_name=filename,
+                            mime="application/pdf",
+                            type="primary"
+                        )
+                    except Exception as pdf_err:
+                        st.warning(f"PDF generation failed: {pdf_err}")
 
     else:
         # Existing logic for agents
