@@ -80,7 +80,7 @@ This project uses `uv` for lightning-fast dependency management.
 
 &#x20;  ```bash
 
-&#x20;  git clone https://github.com/yourusername/invest-ai.git
+&#x20;  git clone [https://github.com/yourusername/invest-ai.git](https://github.com/ankurrjain/invest-ai)
 
 &#x20;  cd invest-ai
 
