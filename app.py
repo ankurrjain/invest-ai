@@ -260,17 +260,44 @@ else:
         if not watchlist:
             st.info("Add stocks in the sidebar, then run the screen.")
         else:
+            horizon_c1, horizon_c2 = st.columns([1.5, 1.2])
+            with horizon_c1:
+                swing_preset = st.selectbox(
+                    "⏱️ Swing Holding Horizon",
+                    [
+                        "3–4 Days (Quick Momentum Swing)",
+                        "2–3 Days (Fast Breakout)",
+                        "5–8 Days (Weekly Swing)",
+                        "10–15 Days (Positional Swing)",
+                        "Custom Range",
+                    ],
+                    index=0,
+                    help="Calibrates entry trigger, stop-loss tightness, and profit targets to your holding period."
+                )
+            with horizon_c2:
+                if swing_preset == "Custom Range":
+                    horizon_days = st.slider("Target Holding Days", min_value=2, max_value=20, value=4, step=1)
+                elif "2–3" in swing_preset:
+                    horizon_days = 3
+                elif "3–4" in swing_preset:
+                    horizon_days = 4
+                elif "5–8" in swing_preset:
+                    horizon_days = 7
+                else:
+                    horizon_days = 12
+                st.info(f"🎯 Strategy calibrated for **{horizon_days} trading days**")
+
             scan_col, detail_col = st.columns([1, 1])
             with scan_col:
                 run_swing_scan = st.button("🔎 Run watchlist analysis", type="primary", use_container_width=True)
             with detail_col:
-                selected_swing_ticker = st.selectbox("Chart detail", watchlist)
+                selected_swing_ticker = st.selectbox("Chart & trade detail", watchlist)
 
             if run_swing_scan:
                 rows, failures = [], []
-                progress = st.progress(0, text="Starting daily technical screen...")
+                progress = st.progress(0, text=f"Starting {horizon_days}-day swing technical screen...")
                 for index, symbol in enumerate(watchlist, start=1):
-                    _, snapshot, error = get_swing_snapshot(symbol)
+                    _, snapshot, error = get_swing_snapshot(symbol, horizon_days=horizon_days)
                     if snapshot:
                         rows.append(snapshot)
                     else:
@@ -283,60 +310,149 @@ else:
             screen_rows = st.session_state.get("swing_screen", [])
             if screen_rows:
                 screen_df = pd.DataFrame(screen_rows).sort_values("Score", ascending=False)
-                display_columns = ["Ticker", "Signal", "Score", "Price", "RSI (14)", "ADX (14)", "+DI", "-DI", "Volume / 20d", "ATR %", "As of", "Setup"]
-                st.markdown("### Latest screen")
+                display_columns = [
+                    "Ticker", "Signal", "Score", "Price",
+                    "Entry Price", "Stop Loss", "Target 1", "Target 2",
+                    "R:R Ratio", "Risk %", "Target 1 %", "ATR %", "Volume / 20d", "Setup"
+                ]
+                # Filter to available columns
+                valid_cols = [c for c in display_columns if c in screen_df.columns]
+                st.markdown(f"### Latest screen ({horizon_days}-day horizon)")
+                format_dict = {
+                    "Price": "{:.2f}",
+                    "Entry Price": "{:.2f}",
+                    "Stop Loss": "{:.2f}",
+                    "Target 1": "{:.2f}",
+                    "Target 2": "{:.2f}",
+                    "R:R Ratio": "1:{:.1f}",
+                    "Risk %": "{:.1f}%",
+                    "Target 1 %": "+{:.1f}%",
+                    "ATR %": "{:.2f}%",
+                    "Volume / 20d": "{:.2f}x",
+                }
+                format_dict = {k: v for k, v in format_dict.items() if k in valid_cols}
                 st.dataframe(
-                    screen_df[display_columns].style.format({
-                        "Price": "{:.2f}", "RSI (14)": "{:.1f}", "ADX (14)": "{:.1f}",
-                        "+DI": "{:.1f}", "-DI": "{:.1f}", "Volume / 20d": "{:.2f}x", "ATR %": "{:.2f}%",
-                    }),
+                    screen_df[valid_cols].style.format(format_dict),
                     use_container_width=True,
                     hide_index=True,
                 )
                 st.download_button(
                     "Download latest screen (CSV)",
                     screen_df.to_csv(index=False).encode("utf-8"),
-                    file_name=f"swing_watchlist_{datetime.now().strftime('%Y%m%d')}.csv",
+                    file_name=f"swing_watchlist_{horizon_days}d_{datetime.now().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
                 )
                 for issue in st.session_state.get("swing_failures", []):
                     st.warning(issue)
 
-            chart_data, detail_snapshot, detail_error = get_swing_snapshot(selected_swing_ticker)
+            chart_data, detail_snapshot, detail_error = get_swing_snapshot(selected_swing_ticker, horizon_days=horizon_days)
             if detail_error:
                 st.warning(detail_error)
             elif chart_data is not None and detail_snapshot is not None:
-                st.markdown(f"### One-year chart: `{selected_swing_ticker}` — {detail_snapshot['Signal']}")
+                cur = get_currency_symbol(selected_swing_ticker)
+                st.markdown(f"### One-year chart: `{selected_swing_ticker}` — {detail_snapshot['Signal']} ({horizon_days}-Day Swing)")
                 fig = go.Figure()
                 fig.add_trace(go.Candlestick(
                     x=chart_data.index, open=chart_data["Open"], high=chart_data["High"],
                     low=chart_data["Low"], close=chart_data["Close"], name="Price",
                 ))
-                for column, label, color in [("SMA20", "SMA 20", "#60A5FA"), ("SMA50", "SMA 50", "#FBBF24"), ("SMA200", "SMA 200", "#F472B6")]:
-                    fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data[column], name=label, line=dict(color=color, width=1.3)))
-                fig.update_layout(template="plotly_dark", height=480, margin=dict(l=20, r=20, t=35, b=20), xaxis_rangeslider_visible=False, yaxis_title="Price")
+                # Add indicator lines
+                for column, label, color in [
+                    ("EMA9", "EMA 9", "#A78BFA"),
+                    ("EMA21", "EMA 21", "#38BDF8"),
+                    ("SMA20", "SMA 20", "#60A5FA"),
+                    ("SMA50", "SMA 50", "#FBBF24"),
+                    ("SMA200", "SMA 200", "#F472B6"),
+                ]:
+                    if column in chart_data.columns:
+                        fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data[column], name=label, line=dict(color=color, width=1.2)))
+
+                # Add trade setup levels to chart
+                if "Entry Price" in detail_snapshot:
+                    e_p = detail_snapshot["Entry Price"]
+                    sl_p = detail_snapshot["Stop Loss"]
+                    t1_p = detail_snapshot["Target 1"]
+                    t2_p = detail_snapshot["Target 2"]
+                    fig.add_hline(
+                        y=e_p, line_dash="solid", line_color="#38BDF8", line_width=1.8,
+                        annotation_text=f"Entry: {cur}{e_p:.2f}", annotation_position="top left",
+                        annotation_font=dict(color="#38BDF8", size=11)
+                    )
+                    fig.add_hline(
+                        y=sl_p, line_dash="dash", line_color="#EF4444", line_width=1.6,
+                        annotation_text=f"Stop Loss: {cur}{sl_p:.2f} (-{detail_snapshot.get('Risk %', 0):.1f}%)", annotation_position="bottom left",
+                        annotation_font=dict(color="#EF4444", size=11)
+                    )
+                    fig.add_hline(
+                        y=t1_p, line_dash="dash", line_color="#10B981", line_width=1.6,
+                        annotation_text=f"Target 1: {cur}{t1_p:.2f} (+{detail_snapshot.get('Target 1 %', 0):.1f}%)", annotation_position="top left",
+                        annotation_font=dict(color="#10B981", size=11)
+                    )
+                    fig.add_hline(
+                        y=t2_p, line_dash="dot", line_color="#059669", line_width=1.6,
+                        annotation_text=f"Target 2: {cur}{t2_p:.2f} (+{detail_snapshot.get('Target 2 %', 0):.1f}%)", annotation_position="top left",
+                        annotation_font=dict(color="#059669", size=11)
+                    )
+
+                fig.update_layout(
+                    template="plotly_dark", height=500,
+                    margin=dict(l=20, r=20, t=35, b=20),
+                    xaxis_rangeslider_visible=False,
+                    yaxis_title="Price"
+                )
                 st.plotly_chart(fig, use_container_width=True)
+
+                st.markdown("#### 📊 Indicator Snapshot")
                 metrics = st.columns(5)
                 metrics[0].metric("Signal", detail_snapshot["Signal"], f"Score {detail_snapshot['Score']:+d}")
                 metrics[1].metric("RSI (14)", f"{detail_snapshot['RSI (14)']:.1f}")
                 metrics[2].metric("ADX (14)", f"{detail_snapshot['ADX (14)']:.1f}", f"+DI {detail_snapshot['+DI']:.1f} / -DI {detail_snapshot['-DI']:.1f}")
                 metrics[3].metric("Volume", f"{detail_snapshot['Volume / 20d']:.2f}x", "vs 20-day avg")
                 metrics[4].metric("ATR risk", f"{detail_snapshot['ATR %']:.2f}%", "14-day average range")
-                with st.expander("How the signal is scored"):
+
+                if "Entry Price" in detail_snapshot:
+                    st.markdown(f"#### 🎯 Actionable {horizon_days}-Day Trade Setup")
+                    trade_cols = st.columns(5)
+                    trade_cols[0].metric("Entry Trigger", f"{cur}{detail_snapshot['Entry Price']:.2f}", detail_snapshot.get("Direction", "LONG"))
+                    trade_cols[1].metric("Stop Loss", f"{cur}{detail_snapshot['Stop Loss']:.2f}", f"-{detail_snapshot.get('Risk %', 0):.1f}% Risk")
+                    trade_cols[2].metric("Target 1", f"{cur}{detail_snapshot['Target 1']:.2f}", f"+{detail_snapshot.get('Target 1 %', 0):.1f}%")
+                    trade_cols[3].metric("Target 2", f"{cur}{detail_snapshot['Target 2']:.2f}", f"+{detail_snapshot.get('Target 2 %', 0):.1f}%")
+                    trade_cols[4].metric("Risk : Reward", f"1 : {detail_snapshot.get('R:R Ratio', 1.5):.1f}", detail_snapshot.get("Time Stop", f"{horizon_days}d exit"))
+
+                with st.expander("How the signal is scored & execution guidance"):
                     st.write(detail_snapshot["Setup"] or "No decisive setup.")
-                    st.caption("BUY requires several aligned trend and momentum conditions. A signal is a screening aid only; confirm price action, liquidity, news/events, position size, and your own risk limits before trading.")
+                    st.markdown(f"""
+                    **Execution Rules for {horizon_days}-Day Swings:**
+                    - **Entry**: Trigger when price breaks above **{cur}{detail_snapshot.get('Entry Price', 0):.2f}** with volume confirmation.
+                    - **Stop Loss**: Place hard stop at **{cur}{detail_snapshot.get('Stop Loss', 0):.2f}**. Risk is capped at ~{detail_snapshot.get('Risk %', 0):.1f}%.
+                    - **Target 1**: Scale out 50% position at **{cur}{detail_snapshot.get('Target 1', 0):.2f}** and move stop loss to breakeven.
+                    - **Target 2**: Let runner test **{cur}{detail_snapshot.get('Target 2', 0):.2f}**.
+                    - **Time Stop**: {detail_snapshot.get('Time Stop', f'Exit after {horizon_days} trading sessions if momentum stalls')}.
+                    """)
 
                 st.markdown("### 🤖 Agent setup review")
-                st.caption("Run this only for a shortlisted name. The agent reviews the technical setup alongside fundamentals and recent news; it can disagree with the screen.")
+                st.caption(f"Run this for a shortlisted name. The agent reviews the {horizon_days}-day technical trade setup alongside fundamentals and recent news.")
                 agent_focus = st.selectbox(
                     "Review focus",
                     ["Swing trade validation", "Small-cap risk check", "Catalyst and news check"],
                     key="swing_agent_focus",
                 )
                 if st.button("Run agent review for selected stock", type="primary", use_container_width=True):
-                    agent_query = f"""Review {selected_swing_ticker} as a potential 2-15 trading-day swing trade.
-Technical screen snapshot: signal={detail_snapshot['Signal']}, score={detail_snapshot['Score']}, RSI={detail_snapshot['RSI (14)']:.1f}, ADX={detail_snapshot['ADX (14)']:.1f}, +DI={detail_snapshot['+DI']:.1f}, -DI={detail_snapshot['-DI']:.1f}, volume ratio={detail_snapshot['Volume / 20d']:.2f}x, ATR={detail_snapshot['ATR %']:.2f}%.
-Focus: {agent_focus}. Use technical, fundamental and news analysis. Give a concise verdict: VALIDATE, WAIT, or REJECT. Explain catalysts, invalidation risks, liquidity/volatility concerns, and what must happen at the next daily close. Do not present this as financial advice."""
+                    agent_query = f"""Review {selected_swing_ticker} as a potential {horizon_days}-trading-day swing trade.
+Technical setup snapshot ({horizon_days}-day horizon):
+- Signal: {detail_snapshot['Signal']} (Score: {detail_snapshot['Score']})
+- Proposed Entry: {cur}{detail_snapshot.get('Entry Price', 'N/A')}
+- Proposed Stop-Loss: {cur}{detail_snapshot.get('Stop Loss', 'N/A')} (Risk: {detail_snapshot.get('Risk %', 0):.1f}%)
+- Proposed Target 1: {cur}{detail_snapshot.get('Target 1', 'N/A')} (Gain: +{detail_snapshot.get('Target 1 %', 0):.1f}%, R:R: 1:{detail_snapshot.get('R:R Ratio', 1.5):.1f})
+- Proposed Target 2: {cur}{detail_snapshot.get('Target 2', 'N/A')} (Gain: +{detail_snapshot.get('Target 2 %', 0):.1f}%)
+- Time-based exit rule: {detail_snapshot.get('Time Stop', f'Exit after {horizon_days} sessions')}
+- Indicators: RSI={detail_snapshot['RSI (14)']:.1f}, ADX={detail_snapshot['ADX (14)']:.1f}, Volume Ratio={detail_snapshot['Volume / 20d']:.2f}x, ATR={detail_snapshot['ATR %']:.2f}%.
+
+Focus: {agent_focus}. Assess whether this {horizon_days}-day setup is viable:
+1. Is the proposed Entry achievable and safe?
+2. Is the Stop-Loss placement protected by technical structure or too loose/tight?
+3. Is Target 1 realistic within {horizon_days} trading days given volatility and resistance levels?
+4. Final verdict: VALIDATE, WAIT, or REJECT. Provide exact trade guidance. Do not present this as financial advice."""
                     agent_state = {
                         "messages": [], "mode": "single", "ticker": selected_swing_ticker,
                         "market": market_val, "query": agent_query, "agents_to_call": [],
