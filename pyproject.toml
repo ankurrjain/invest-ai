@@ -16,12 +16,12 @@ dependencies = [
     "python-dotenv>=1.0",
     "pandas>=2.0",
     "numpy>=1.26",
-    "ta>=0.11",
     "requests>=2.31",
     "lxml>=5.2",
     "beautifulsoup4>=4.12",
     "html5lib>=1.1",
-    "openpyxl"
+    "openpyxl",
+    "reportlab>=4.0",
 ]
 
 [build-system]

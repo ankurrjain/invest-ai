@@ -5,6 +5,8 @@ import streamlit as st
 import plotly.graph_objects as go
 import yfinance as yf
 import pandas as pd
+import json
+from pathlib import Path
 from datetime import datetime
 from invest_ai.agents.graph import research_graph
 from invest_ai.utils.ticker import resolve_ticker, get_currency_symbol
@@ -19,6 +21,26 @@ from invest_ai.utils.dashboards import (
     get_fii_dii_holdings,
     get_trending_stocks
 )
+from invest_ai.utils.swing import get_swing_snapshot
+
+WATCHLIST_FILE = Path(__file__).parent / ".invest_ai_watchlist.json"
+YFINANCE_CACHE_DIR = Path(__file__).parent / ".yfinance_cache"
+# Some managed Windows installations restrict yfinance's profile cache. Keep its
+# SQLite cache alongside the app so live quotes work consistently.
+yf.set_tz_cache_location(str(YFINANCE_CACHE_DIR))
+
+
+def load_watchlist() -> list[str]:
+    """Load a small local watchlist; malformed files are safely ignored."""
+    try:
+        items = json.loads(WATCHLIST_FILE.read_text(encoding="utf-8"))
+        return items if isinstance(items, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def save_watchlist(items: list[str]) -> None:
+    WATCHLIST_FILE.write_text(json.dumps(sorted(set(items)), indent=2), encoding="utf-8")
 
 # --- Page Config ---
 st.set_page_config(
@@ -49,9 +71,34 @@ st.markdown("""
         margin-bottom: 2rem;
     }
     div[data-testid="stSidebar"] {
-        background-color: #1A202C;
+        background: linear-gradient(180deg, #101827 0%, #151b2d 100%);
         border-right: 1px solid #2D3748;
     }
+    .swing-hero {
+        background: radial-gradient(circle at top right, rgba(56, 189, 248, .18), transparent 32%),
+                    linear-gradient(120deg, #111c31, #111827 52%, #172554);
+        border: 1px solid rgba(96, 165, 250, .32);
+        border-radius: 18px;
+        padding: 1.35rem 1.5rem;
+        margin: 0.5rem 0 1.25rem;
+        box-shadow: 0 16px 38px rgba(0, 0, 0, .18);
+    }
+    .swing-kicker { color: #7dd3fc; font-size: .78rem; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+    .swing-title { color: #f8fafc; font-size: 1.7rem; font-weight: 750; margin: .25rem 0; }
+    .swing-copy { color: #b8c6db; margin: 0; max-width: 760px; }
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(90deg, #0284c7, #2563eb);
+        border: 0;
+        border-radius: 9px;
+        font-weight: 700;
+    }
+    div[data-testid="stMetric"] {
+        background: #131d30;
+        border: 1px solid #273853;
+        border-radius: 12px;
+        padding: .6rem .8rem;
+    }
+    div[data-testid="stDataFrame"] { border: 1px solid #263754; border-radius: 12px; overflow: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -94,7 +141,7 @@ def stream_report(text):
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     
-    app_mode = st.radio("Mode", ["Single Stock Research", "Compare Stocks", "Thematic Screener", "Dashboards", "Dividend Target Planner", "Live Intelligence Report", "Live News Report", "Family Portfolio Review"])
+    app_mode = st.radio("Mode", ["Single Stock Research", "Swing Watchlist", "Compare Stocks", "Thematic Screener", "Dashboards", "Dividend Target Planner", "Live Intelligence Report", "Live News Report", "Family Portfolio Review"])
     
     market = st.radio("Target Market", ["India (NSE/BSE)", "US (NYSE/NASDAQ)"])
     market_val = "india" if "India" in market else "us"
@@ -110,6 +157,33 @@ with st.sidebar:
             "Dividend Yield Report",
             "Economic Moat Report"
         ])
+    elif app_mode == "Swing Watchlist":
+        st.markdown("Build a persistent list, then run a one-year daily technical screen on demand.")
+        watchlist = load_watchlist()
+        if not watchlist and market_val == "india":
+            if st.button("Load sample small/mid-cap basket", use_container_width=True, help="Examples only for testing the scanner; this is not a recommendation list."):
+                save_watchlist(["KAYNES.NS", "SULA.NS", "CAMPUS.NS"])
+                st.rerun()
+        new_symbol = st.text_input("Add stock to watchlist", placeholder="e.g. RELIANCE or AAPL", key="watchlist_symbol").upper().strip()
+        add_stock = st.button("Add to watchlist", use_container_width=True)
+        if add_stock and new_symbol:
+            resolved = resolve_ticker(new_symbol, market_val)
+            if resolved not in watchlist:
+                save_watchlist(watchlist + [resolved])
+                st.success(f"Added {resolved}")
+            else:
+                st.info(f"{resolved} is already in the watchlist.")
+            watchlist = load_watchlist()
+        if watchlist:
+            remove_symbols = st.multiselect("Remove stocks", watchlist, key="watchlist_remove")
+            if st.button("Remove selected", disabled=not remove_symbols, use_container_width=True):
+                save_watchlist([item for item in watchlist if item not in remove_symbols])
+                st.rerun()
+            st.caption(f"{len(watchlist)} stock(s): {', '.join(watchlist)}")
+        else:
+            st.info("Add one or more stocks to start your screen.")
+        raw_ticker = "SwingWatchlist"
+        depth = "N/A"
     elif app_mode == "Compare Stocks":
         raw_ticker = st.text_input("Enter Tickers (comma-separated)", placeholder="e.g. AAPL, MSFT, GOOGL").upper()
         depth = "Comparison Report"
@@ -173,6 +247,123 @@ else:
         chart_fig = plot_candlestick(ticker)
         if chart_fig:
             st.plotly_chart(chart_fig, use_container_width=True)
+    elif app_mode == "Swing Watchlist":
+        ticker = "SwingWatchlist"
+        watchlist = load_watchlist()
+        st.markdown("""
+        <section class="swing-hero">
+          <div class="swing-kicker">Daily swing scanner</div>
+          <div class="swing-title">📋 Swing Trading Watchlist</div>
+          <p class="swing-copy">Screen price action first, then ask the research agent to challenge the setup with company, catalyst and small-cap risk context. Signals are educational—not a promise of next-day performance.</p>
+        </section>
+        """, unsafe_allow_html=True)
+        if not watchlist:
+            st.info("Add stocks in the sidebar, then run the screen.")
+        else:
+            scan_col, detail_col = st.columns([1, 1])
+            with scan_col:
+                run_swing_scan = st.button("🔎 Run watchlist analysis", type="primary", use_container_width=True)
+            with detail_col:
+                selected_swing_ticker = st.selectbox("Chart detail", watchlist)
+
+            if run_swing_scan:
+                rows, failures = [], []
+                progress = st.progress(0, text="Starting daily technical screen...")
+                for index, symbol in enumerate(watchlist, start=1):
+                    _, snapshot, error = get_swing_snapshot(symbol)
+                    if snapshot:
+                        rows.append(snapshot)
+                    else:
+                        failures.append(f"{symbol}: {error}")
+                    progress.progress(index / len(watchlist), text=f"Analyzing {symbol} ({index}/{len(watchlist)})")
+                progress.empty()
+                st.session_state["swing_screen"] = rows
+                st.session_state["swing_failures"] = failures
+
+            screen_rows = st.session_state.get("swing_screen", [])
+            if screen_rows:
+                screen_df = pd.DataFrame(screen_rows).sort_values("Score", ascending=False)
+                display_columns = ["Ticker", "Signal", "Score", "Price", "RSI (14)", "ADX (14)", "+DI", "-DI", "Volume / 20d", "ATR %", "As of", "Setup"]
+                st.markdown("### Latest screen")
+                st.dataframe(
+                    screen_df[display_columns].style.format({
+                        "Price": "{:.2f}", "RSI (14)": "{:.1f}", "ADX (14)": "{:.1f}",
+                        "+DI": "{:.1f}", "-DI": "{:.1f}", "Volume / 20d": "{:.2f}x", "ATR %": "{:.2f}%",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.download_button(
+                    "Download latest screen (CSV)",
+                    screen_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"swing_watchlist_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                )
+                for issue in st.session_state.get("swing_failures", []):
+                    st.warning(issue)
+
+            chart_data, detail_snapshot, detail_error = get_swing_snapshot(selected_swing_ticker)
+            if detail_error:
+                st.warning(detail_error)
+            elif chart_data is not None and detail_snapshot is not None:
+                st.markdown(f"### One-year chart: `{selected_swing_ticker}` — {detail_snapshot['Signal']}")
+                fig = go.Figure()
+                fig.add_trace(go.Candlestick(
+                    x=chart_data.index, open=chart_data["Open"], high=chart_data["High"],
+                    low=chart_data["Low"], close=chart_data["Close"], name="Price",
+                ))
+                for column, label, color in [("SMA20", "SMA 20", "#60A5FA"), ("SMA50", "SMA 50", "#FBBF24"), ("SMA200", "SMA 200", "#F472B6")]:
+                    fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data[column], name=label, line=dict(color=color, width=1.3)))
+                fig.update_layout(template="plotly_dark", height=480, margin=dict(l=20, r=20, t=35, b=20), xaxis_rangeslider_visible=False, yaxis_title="Price")
+                st.plotly_chart(fig, use_container_width=True)
+                metrics = st.columns(5)
+                metrics[0].metric("Signal", detail_snapshot["Signal"], f"Score {detail_snapshot['Score']:+d}")
+                metrics[1].metric("RSI (14)", f"{detail_snapshot['RSI (14)']:.1f}")
+                metrics[2].metric("ADX (14)", f"{detail_snapshot['ADX (14)']:.1f}", f"+DI {detail_snapshot['+DI']:.1f} / -DI {detail_snapshot['-DI']:.1f}")
+                metrics[3].metric("Volume", f"{detail_snapshot['Volume / 20d']:.2f}x", "vs 20-day avg")
+                metrics[4].metric("ATR risk", f"{detail_snapshot['ATR %']:.2f}%", "14-day average range")
+                with st.expander("How the signal is scored"):
+                    st.write(detail_snapshot["Setup"] or "No decisive setup.")
+                    st.caption("BUY requires several aligned trend and momentum conditions. A signal is a screening aid only; confirm price action, liquidity, news/events, position size, and your own risk limits before trading.")
+
+                st.markdown("### 🤖 Agent setup review")
+                st.caption("Run this only for a shortlisted name. The agent reviews the technical setup alongside fundamentals and recent news; it can disagree with the screen.")
+                agent_focus = st.selectbox(
+                    "Review focus",
+                    ["Swing trade validation", "Small-cap risk check", "Catalyst and news check"],
+                    key="swing_agent_focus",
+                )
+                if st.button("Run agent review for selected stock", type="primary", use_container_width=True):
+                    agent_query = f"""Review {selected_swing_ticker} as a potential 2-15 trading-day swing trade.
+Technical screen snapshot: signal={detail_snapshot['Signal']}, score={detail_snapshot['Score']}, RSI={detail_snapshot['RSI (14)']:.1f}, ADX={detail_snapshot['ADX (14)']:.1f}, +DI={detail_snapshot['+DI']:.1f}, -DI={detail_snapshot['-DI']:.1f}, volume ratio={detail_snapshot['Volume / 20d']:.2f}x, ATR={detail_snapshot['ATR %']:.2f}%.
+Focus: {agent_focus}. Use technical, fundamental and news analysis. Give a concise verdict: VALIDATE, WAIT, or REJECT. Explain catalysts, invalidation risks, liquidity/volatility concerns, and what must happen at the next daily close. Do not present this as financial advice."""
+                    agent_state = {
+                        "messages": [], "mode": "single", "ticker": selected_swing_ticker,
+                        "market": market_val, "query": agent_query, "agents_to_call": [],
+                        "agents_called": [], "technical_analysis": None, "fundamental_analysis": None,
+                        "news_analysis": None, "dividend_analysis": None, "moat_analysis": None,
+                        "comparison_analysis": None, "screener_analysis": None,
+                        "live_intel_analysis": None, "live_news_analysis": None,
+                        "final_report": None, "company_name": None, "current_price": None, "error": None,
+                    }
+                    with st.status("🤖 Research agent reviewing the setup...", expanded=True) as status:
+                        st.write("Reading the technical setup, company context, and recent news...")
+                        try:
+                            agent_result = research_graph.invoke(agent_state)
+                            st.session_state["swing_agent_report"] = {
+                                "ticker": selected_swing_ticker,
+                                "report": agent_result.get("final_report", "No report generated."),
+                                "agents": agent_result.get("agents_called", []),
+                            }
+                            status.update(label="✅ Agent review complete", state="complete", expanded=False)
+                        except Exception as exc:
+                            status.update(label="❌ Agent review failed", state="error", expanded=True)
+                            st.error(f"Agent review failed: {exc}")
+                agent_report = st.session_state.get("swing_agent_report")
+                if agent_report and agent_report["ticker"] == selected_swing_ticker:
+                    st.markdown(f"#### Agent review: `{selected_swing_ticker}`")
+                    st.caption(f"Specialists consulted: {', '.join(agent_report['agents']).title() or 'Unavailable'}")
+                    st.markdown(agent_report["report"])
     elif app_mode == "Compare Stocks":
         tickers = [resolve_ticker(t.strip(), market_val) for t in raw_ticker.split(",") if t.strip()]
         ticker = ", ".join(tickers)
